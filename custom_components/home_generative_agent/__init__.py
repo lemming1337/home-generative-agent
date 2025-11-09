@@ -105,11 +105,13 @@ from .const import (
     RECOMMENDED_VLM_TEMPERATURE,
     SIGNAL_HGA_NEW_LATEST,
     SIGNAL_HGA_RECOGNIZED,
+    SUMMARIZATION_MIRO_STAT,
     SUMMARIZATION_MODEL_CTX,
     SUMMARIZATION_MODEL_PREDICT,
     SUMMARIZATION_MODEL_REPEAT_PENALTY,
     SUMMARIZATION_MODEL_TOP_P,
     VIDEO_ANALYZER_SNAPSHOT_ROOT,
+    VLM_MIRO_STAT,
     VLM_NUM_CTX,
     VLM_NUM_PREDICT,
     VLM_REPEAT_PENALTY,
@@ -361,6 +363,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                 num_ctx=ConfigurableField(id="num_ctx"),
                 repeat_penalty=ConfigurableField(id="repeat_penalty"),
                 reasoning=ConfigurableField(id="reasoning"),
+                mirostat=ConfigurableField(id="mirostat"),
             )
         except Exception:
             LOGGER.exception("Ollama provider init failed; continuing without it.")
@@ -370,12 +373,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
         try:
             gemini_provider = ChatGoogleGenerativeAI(
                 api_key=gemini_key,
-                model=RECOMMENDED_GEMINI_CHAT_MODEL,  # default, will get overridden
+                model=RECOMMENDED_GEMINI_CHAT_MODEL,
             ).configurable_fields(
                 model=ConfigurableField(id="model"),
                 temperature=ConfigurableField(id="temperature"),
                 top_p=ConfigurableField(id="top_p"),
-                max_output_tokens=ConfigurableField(id="max_tokens"),
+                max_output_tokens=ConfigurableField(id="max_output_tokens"),
             )
         except Exception:
             LOGGER.exception("Gemini provider init failed; continuing without it.")
@@ -553,7 +556,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     ),
                     "temperature": chat_temp,
                     "top_p": CHAT_MODEL_TOP_P,
-                    "max_tokens": CHAT_MODEL_MAX_TOKENS,
                 }
             }
         )
@@ -566,7 +568,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     ),
                     "temperature": chat_temp,
                     "top_p": CHAT_MODEL_TOP_P,
-                    "max_tokens": CHAT_MODEL_MAX_TOKENS,
                 }
             }
         )
@@ -615,7 +616,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     ),
                     "temperature": vlm_temp,
                     "top_p": VLM_TOP_P,
-                    "max_tokens": VLM_NUM_PREDICT,
                 }
             }
         )
@@ -626,7 +626,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     "model": entry.options.get(CONF_GEMINI_VLM, RECOMMENDED_GEMINI_VLM),
                     "temperature": vlm_temp,
                     "top_p": VLM_TOP_P,
-                    "max_tokens": VLM_NUM_PREDICT,
                 }
             }
         )
@@ -655,6 +654,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     "num_predict": VLM_NUM_PREDICT,
                     "num_ctx": VLM_NUM_CTX,
                     "repeat_penalty": VLM_REPEAT_PENALTY,
+                    "mirostat": VLM_MIRO_STAT,
                     **rf_vlm,
                 }
             }
@@ -678,7 +678,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     ),
                     "temperature": sum_temp,
                     "top_p": SUMMARIZATION_MODEL_TOP_P,
-                    "max_tokens": SUMMARIZATION_MODEL_PREDICT,
                 }
             }
         )
@@ -692,7 +691,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     ),
                     "temperature": sum_temp,
                     "top_p": SUMMARIZATION_MODEL_TOP_P,
-                    "max_tokens": SUMMARIZATION_MODEL_PREDICT,
                 }
             }
         )
@@ -727,6 +725,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
                     "num_predict": SUMMARIZATION_MODEL_PREDICT,
                     "num_ctx": SUMMARIZATION_MODEL_CTX,
                     "repeat_penalty": SUMMARIZATION_MODEL_REPEAT_PENALTY,
+                    "mirostat": SUMMARIZATION_MIRO_STAT,
                     **rf_summarization,
                 }
             }
