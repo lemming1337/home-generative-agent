@@ -301,7 +301,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
     gemini_key = conf.get(CONF_GEMINI_API_KEY)
     ollama_url = conf.get(CONF_OLLAMA_URL, RECOMMENDED_OLLAMA_URL)
     ollama_url = ensure_http_url(ollama_url)
-    face_api_url = conf.get(CONF_FACE_API_URL, RECOMMENDED_FACE_API_URL) or RECOMMENDED_FACE_API_URL
+    face_api_url = (
+        conf.get(CONF_FACE_API_URL, RECOMMENDED_FACE_API_URL)
+        or RECOMMENDED_FACE_API_URL
+    )
     face_api_url = ensure_http_url(face_api_url)
 
     # Health checks (fast, non-fatal)
