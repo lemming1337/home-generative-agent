@@ -51,6 +51,7 @@ from .const import (
     CONF_GEMINI_EMBEDDING_MODEL,
     CONF_GEMINI_SUMMARIZATION_MODEL,
     CONF_GEMINI_VLM,
+    CONF_NOTIFY_SERVICE,
     CONF_OLLAMA_CHAT_MODEL,
     CONF_OLLAMA_EMBEDDING_MODEL,
     CONF_OLLAMA_REASONING,
@@ -300,7 +301,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
     gemini_key = conf.get(CONF_GEMINI_API_KEY)
     ollama_url = conf.get(CONF_OLLAMA_URL, RECOMMENDED_OLLAMA_URL)
     ollama_url = ensure_http_url(ollama_url)
-    face_api_url = conf.get(CONF_FACE_API_URL, RECOMMENDED_FACE_API_URL)
+    face_api_url = conf.get(CONF_FACE_API_URL, RECOMMENDED_FACE_API_URL) or RECOMMENDED_FACE_API_URL
     face_api_url = ensure_http_url(face_api_url)
 
     # Health checks (fast, non-fatal)
@@ -655,10 +656,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
             }
         )
 
-    video_analyzer = VideoAnalyzer(hass, entry)
-
     face_mode = entry.options.get(
         CONF_FACE_RECOGNITION_MODE, RECOMMENDED_FACE_RECOGNITION_MODE
+    )
+
+    # Initialize VideoAnalyzer with required dependencies (no runtime_data access)
+    video_analyzer = VideoAnalyzer(
+        hass,
+        entry,
+        face_api_url,
+        person_gallery,
+        face_mode,
+        vision_model,
+        summarization_model,
     )
 
     # Save runtime data.
@@ -675,6 +685,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
         face_api_url=face_api_url,
         person_gallery=person_gallery,
     )
+
+    # Set VideoAnalyzer dependencies now that runtime_data is available
+    video_analyzer.set_dependencies(store, entry.options.get(CONF_NOTIFY_SERVICE))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
