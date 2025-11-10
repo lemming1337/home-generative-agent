@@ -194,6 +194,10 @@ class NullChat:
         """Return self, as this is a no-op."""
         return self
 
+    def bind_tools(self, _tools: Any) -> NullChat:
+        """Return self, as this is a no-op."""
+        return self
+
 
 def _register_services(hass: HomeAssistant, entry: HGAConfigEntry) -> None:
     """Register integration services."""

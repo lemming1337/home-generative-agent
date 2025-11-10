@@ -270,6 +270,23 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
 
         # Use the already-configured chat model from __init__.py
         base_llm = runtime_data.chat_model
+
+        # Check if we're using NullChat (fallback when real model unavailable)
+        if type(base_llm).__name__ == "NullChat":
+            LOGGER.error(
+                "Chat model is not available. Please check your configuration and "
+                "ensure the selected provider (API key, URL, etc.) is correct. "
+                "Check the logs for provider initialization errors."
+            )
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_error(
+                intent.IntentResponseErrorCode.UNKNOWN,
+                "Chat model is not available. Please check your configuration and logs.",
+            )
+            return conversation.ConversationResult(
+                response=intent_response, conversation_id=conversation_id
+            )
+
         try:
             chat_model_with_tools = base_llm.bind_tools(tools)
         except AttributeError:
