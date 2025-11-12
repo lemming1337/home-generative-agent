@@ -198,7 +198,7 @@ class NullChat:
 async def _register_frontend_resources(hass: HomeAssistant) -> None:
     """Register frontend resources for the custom card."""
     # Only register once, not for each config entry
-    if f"_hga_frontend_registered" in hass.data:
+    if "_hga_frontend_registered" in hass.data:
         return
 
     card_dir = Path(__file__).parent / "www"
@@ -215,7 +215,7 @@ async def _register_frontend_resources(hass: HomeAssistant) -> None:
         cache_headers=False,  # Disable cache for easier development/updates
     )
 
-    hass.data[f"_hga_frontend_registered"] = True
+    hass.data["_hga_frontend_registered"] = True
 
     LOGGER.info(
         "Registered frontend resources at /%s -> %s",

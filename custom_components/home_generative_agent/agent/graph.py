@@ -32,12 +32,15 @@ from pydantic import ValidationError
 from ..const import (  # noqa: TID252
     CONF_CHAT_MODEL_PROVIDER,
     CONF_GEMINI_CHAT_MODEL,
+    CONF_IMAGE_ANALYSIS_PROMPT,
+    CONF_IMAGE_UPLOAD_ENABLED,
     CONF_OLLAMA_CHAT_MODEL,
     CONF_OPENAI_CHAT_MODEL,
     CONTEXT_MANAGE_USE_TOKENS,
     CONTEXT_MAX_MESSAGES,
     CONTEXT_MAX_TOKENS,
     EMBEDDING_MODEL_PROMPT_TEMPLATE,
+    IMAGE_ANALYSIS_DEFAULT_PROMPT,
     SUMMARIZATION_INITIAL_PROMPT,
     SUMMARIZATION_PROMPT_TEMPLATE,
     SUMMARIZATION_SYSTEM_PROMPT,
@@ -47,6 +50,7 @@ from ..const import (  # noqa: TID252
 from ..core.utils import extract_final  # noqa: TID252
 from .token_counter import count_tokens_cross_provider
 from .tool_metrics import ToolCallMetrics
+from .tools import analyze_image
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -101,6 +105,7 @@ class State(MessagesState):
     summary: str
     chat_model_usage_metadata: dict[str, Any]
     messages_to_remove: list[AnyMessage]
+    uploaded_images: list[bytes]  # Store uploaded images as bytes
 
 
 # ----- Utilities -----
@@ -144,6 +149,70 @@ def _determine_model_name(provider: str, opts: dict[str, Any]) -> str:
 
 
 # ----- Graph nodes and edges -----
+
+
+async def _analyze_uploaded_images(
+    state: State, config: RunnableConfig
+) -> dict[str, Any]:
+    """Analyze uploaded images before passing to the main agent."""
+    if "configurable" not in config:
+        msg = "Configuration is missing."
+        raise HomeAssistantError(msg)
+
+    opts = config["configurable"]["options"]
+    vlm_model = config["configurable"]["vlm_model"]
+
+    # Check if image upload is enabled
+    if not opts.get(CONF_IMAGE_UPLOAD_ENABLED, True):
+        return {}
+
+    # Get uploaded images from state
+    uploaded_images = state.get("uploaded_images", [])
+    if not uploaded_images:
+        return {}
+
+    # Get custom prompt or use default
+    image_prompt = opts.get(CONF_IMAGE_ANALYSIS_PROMPT, IMAGE_ANALYSIS_DEFAULT_PROMPT)
+
+    LOGGER.debug("Analyzing %d uploaded images", len(uploaded_images))
+
+    # Analyze each uploaded image
+    analysis_results = []
+    for idx, image_bytes in enumerate(uploaded_images):
+        try:
+            # Use the existing analyze_image function with custom prompt
+            result = await analyze_image(
+                vlm_model=vlm_model,
+                image=image_bytes,
+                detection_keywords=None,
+                prev_text=None,
+            )
+            analysis_results.append(f"Image {idx + 1}: {result}")
+            LOGGER.debug("Image %d analysis: %s", idx + 1, result)
+        except Exception:
+            LOGGER.exception("Error analyzing uploaded image %d", idx + 1)
+            analysis_results.append(f"Image {idx + 1}: Error analyzing image")
+
+    # If we have analysis results, prepend them to the last user message
+    if analysis_results and state.get("messages"):
+        analysis_text = (
+            f"\n\n[Uploaded Image Analysis]\n{image_prompt}\n\n"
+            + "\n".join(analysis_results)
+        )
+
+        # Find the last HumanMessage and prepend the analysis
+        messages = list(state["messages"])
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                original_content = messages[i].content
+                messages[i] = HumanMessage(
+                    content=analysis_text + "\n\n" + original_content
+                )
+                break
+
+        return {"messages": messages}
+
+    return {}
 
 
 async def _call_model(
@@ -522,12 +591,15 @@ def _should_continue(
 workflow = StateGraph(State)
 
 # Define nodes.
+workflow.add_node("analyze_uploaded_images", _analyze_uploaded_images)
 workflow.add_node("agent", _call_model)
 workflow.add_node("action", _call_tools)
 workflow.add_node("summarize_and_remove_messages", _summarize_and_remove_messages)
 
 # Define edges.
-workflow.add_edge(START, "agent")
+# Flow: START → analyze_uploaded_images → agent → (action → agent)* → summarize → END
+workflow.add_edge(START, "analyze_uploaded_images")
+workflow.add_edge("analyze_uploaded_images", "agent")
 workflow.add_conditional_edges("agent", _should_continue)
 workflow.add_edge("action", "agent")
 workflow.add_edge("summarize_and_remove_messages", END)

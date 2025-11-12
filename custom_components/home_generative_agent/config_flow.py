@@ -43,6 +43,8 @@ from .const import (
     CONF_FACE_API_URL,
     CONF_FACE_RECOGNITION_MODE,
     CONF_GEMINI_API_KEY,
+    CONF_IMAGE_ANALYSIS_PROMPT,
+    CONF_IMAGE_UPLOAD_ENABLED,
     CONF_NOTIFY_SERVICE,
     CONF_OLLAMA_CHAT_MODEL,
     CONF_OLLAMA_REASONING,
@@ -63,6 +65,7 @@ from .const import (
     CONF_VLM_PROVIDER,
     CONF_VLM_TEMPERATURE,
     DOMAIN,
+    IMAGE_ANALYSIS_DEFAULT_PROMPT,
     MODEL_CATEGORY_SPECS,
     RECOMMENDED_ANTHROPIC_CHAT_MODEL,
     RECOMMENDED_ANTHROPIC_SUMMARIZATION_MODEL,
@@ -73,6 +76,7 @@ from .const import (
     RECOMMENDED_EMBEDDING_MODEL_PROVIDER,
     RECOMMENDED_FACE_API_URL,
     RECOMMENDED_FACE_RECOGNITION_MODE,
+    RECOMMENDED_IMAGE_UPLOAD_ENABLED,
     RECOMMENDED_OLLAMA_CHAT_MODEL,
     RECOMMENDED_OLLAMA_REASONING,
     RECOMMENDED_OLLAMA_SUMMARIZATION_MODEL,
@@ -172,6 +176,8 @@ RECOMMENDED_OPTIONS = {
     CONF_OLLAMA_SUMMARIZATION_MODEL: RECOMMENDED_OLLAMA_SUMMARIZATION_MODEL,
     CONF_OPENAI_SUMMARIZATION_MODEL: RECOMMENDED_OPENAI_SUMMARIZATION_MODEL,
     CONF_OLLAMA_REASONING: RECOMMENDED_OLLAMA_REASONING,
+    CONF_IMAGE_UPLOAD_ENABLED: RECOMMENDED_IMAGE_UPLOAD_ENABLED,
+    CONF_IMAGE_ANALYSIS_PROMPT: IMAGE_ANALYSIS_DEFAULT_PROMPT,
 }
 
 
@@ -328,7 +334,22 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
             description={"suggested_value": opts.get(CONF_OLLAMA_REASONING)},
             default=RECOMMENDED_OLLAMA_REASONING,
         ): BooleanSelector(),
+        vol.Optional(
+            CONF_IMAGE_UPLOAD_ENABLED,
+            description={"suggested_value": opts.get(CONF_IMAGE_UPLOAD_ENABLED)},
+            default=RECOMMENDED_IMAGE_UPLOAD_ENABLED,
+        ): BooleanSelector(),
     }
+
+    # Show image analysis prompt only if image upload is enabled
+    if opts.get(CONF_IMAGE_UPLOAD_ENABLED, RECOMMENDED_IMAGE_UPLOAD_ENABLED):
+        schema[
+            vol.Optional(
+                CONF_IMAGE_ANALYSIS_PROMPT,
+                description={"suggested_value": opts.get(CONF_IMAGE_ANALYSIS_PROMPT)},
+                default=IMAGE_ANALYSIS_DEFAULT_PROMPT,
+            )
+        ] = TemplateSelector()
 
     selected_mode = opts.get(CONF_VIDEO_ANALYZER_MODE, RECOMMENDED_VIDEO_ANALYZER_MODE)
     if selected_mode != "disable":
@@ -565,6 +586,9 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
         self._last_analyzer_mode = config_entry.options.get(
             CONF_VIDEO_ANALYZER_MODE, RECOMMENDED_VIDEO_ANALYZER_MODE
         )
+        self._last_image_upload_enabled = config_entry.options.get(
+            CONF_IMAGE_UPLOAD_ENABLED, RECOMMENDED_IMAGE_UPLOAD_ENABLED
+        )
 
     # ---- helpers ----
 
@@ -723,7 +747,7 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
 
     def _schema_changes_since_last(
         self, options: Mapping[str, Any]
-    ) -> tuple[bool, bool, bool]:
+    ) -> tuple[bool, bool, bool, bool]:
         """Detect changes that require re-render."""
         recommended_now = options.get(CONF_RECOMMENDED, False)
         recommended_changed = recommended_now != self.last_rendered_recommended
@@ -732,7 +756,16 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
             CONF_VIDEO_ANALYZER_MODE, RECOMMENDED_VIDEO_ANALYZER_MODE
         )
         analyzer_changed = analyzer_now != self._last_analyzer_mode
-        return recommended_changed, provider_changed, analyzer_changed
+        image_upload_now = options.get(
+            CONF_IMAGE_UPLOAD_ENABLED, RECOMMENDED_IMAGE_UPLOAD_ENABLED
+        )
+        image_upload_changed = image_upload_now != self._last_image_upload_enabled
+        return (
+            recommended_changed,
+            provider_changed,
+            analyzer_changed,
+            image_upload_changed,
+        )
 
     def _remember_schema_baseline(self, options: Mapping[str, Any]) -> None:
         """Record the state we used for last-rendered schema."""
@@ -740,6 +773,9 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
         self._last_providers = self._extract_provider_state(options)
         self._last_analyzer_mode = options.get(
             CONF_VIDEO_ANALYZER_MODE, RECOMMENDED_VIDEO_ANALYZER_MODE
+        )
+        self._last_image_upload_enabled = options.get(
+            CONF_IMAGE_UPLOAD_ENABLED, RECOMMENDED_IMAGE_UPLOAD_ENABLED
         )
 
     # ---- main step ----
@@ -769,9 +805,12 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
             )
 
         # Handle schema-affecting toggles
-        recommended_changed, provider_changed, analyzer_changed = (
-            self._schema_changes_since_last(options)
-        )
+        (
+            recommended_changed,
+            provider_changed,
+            analyzer_changed,
+            image_upload_changed,
+        ) = self._schema_changes_since_last(options)
 
         # If Recommended turned ON → apply defaults and SAVE immediately
         if recommended_changed and options.get(CONF_RECOMMENDED, False):
@@ -782,8 +821,13 @@ class HomeGenerativeAgentOptionsFlow(OptionsFlowWithReload):
             self._remember_schema_baseline(final_options)
             return self.async_create_entry(title="", data=final_options)
 
-        # If Recommended toggled OFF or provider/analyzer changes, re-render once
-        if recommended_changed or provider_changed or analyzer_changed:
+        # If Recommended toggled OFF or provider/analyzer/image_upload changes, re-render once
+        if (
+            recommended_changed
+            or provider_changed
+            or analyzer_changed
+            or image_upload_changed
+        ):
             pruned = _prune_irrelevant_model_fields(options)
             self._remember_schema_baseline(pruned)
             return self.async_show_form(

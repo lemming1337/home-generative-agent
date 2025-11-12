@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import logging
+import re
 import string
 from typing import TYPE_CHECKING, Any, Literal
 
-import markdown
 import homeassistant.util.dt as dt_util
 from homeassistant.components import conversation
 from homeassistant.components.conversation import trace
@@ -73,6 +74,37 @@ def _format_tool(
     if tool.description:
         tool_spec["description"] = tool.description
     return {"type": "function", "function": tool_spec}
+
+
+def _extract_images_from_text(text: str) -> tuple[str, list[bytes]]:
+    """Extract base64-encoded images from text.
+
+    Expects images in format: [IMAGE:data:image/xxx;base64,...]
+    Returns tuple of (cleaned_text, list_of_image_bytes).
+    """
+    # Pattern to match [IMAGE:data:image/xxx;base64,base64string]
+    pattern = r"\[IMAGE:(data:image/[^;]+;base64,([A-Za-z0-9+/=]+))\]"
+    images: list[bytes] = []
+
+    def extract_and_decode(match: re.Match) -> str:
+        """Extract image and decode it."""
+        try:
+            # Extract just the base64 part (group 2)
+            base64_data = match.group(2)
+            image_bytes = base64.b64decode(base64_data)
+            images.append(image_bytes)
+            LOGGER.debug("Extracted image of %d bytes", len(image_bytes))
+            return ""  # Remove the image tag from text
+        except Exception:
+            LOGGER.exception("Error decoding image from text")
+            return ""  # Remove invalid image tag
+
+    # Replace all image tags with empty string and collect images
+    cleaned_text = re.sub(pattern, extract_and_decode, text)
+    # Clean up extra whitespace
+    cleaned_text = " ".join(cleaned_text.split())
+
+    return cleaned_text, images
 
 
 def _convert_content(
@@ -333,15 +365,19 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             debug=LANGCHAIN_LOGGING_LEVEL == "debug",
         )
 
+        # Extract images from user input if present
+        cleaned_text, uploaded_images = _extract_images_from_text(user_input.text)
+
         # Agent input: message history + current user request.
         messages: list[AnyMessage] = []
         messages.extend(message_history)
-        messages.append(HumanMessage(content=user_input.text))
+        messages.append(HumanMessage(content=cleaned_text))
         app_input: State = {
             "messages": messages,
             "summary": "",
             "chat_model_usage_metadata": {},
             "messages_to_remove": [],
+            "uploaded_images": uploaded_images,
         }
 
         # Interact with agent app.
@@ -371,9 +407,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
 
         # Convert Markdown to HTML for better formatting in Home Assistant
         response_content = response["messages"][-1].content
-        html_content = markdown.markdown(
-            response_content, extensions=["fenced_code", "tables", "nl2br"]
-        )
+        # Note: html_content conversion is done but not currently used by HA
+        # html_content = markdown.markdown(
+        #     response_content, extensions=["fenced_code", "tables", "nl2br"]
+        # )
 
         intent_response.async_set_speech(response_content)
         return conversation.ConversationResult(

@@ -60,6 +60,22 @@ REASONING_DELIMITERS: dict[str, str] = {
 CONF_RECOMMENDED = "recommended"
 CONF_PROMPT = "prompt"
 
+# ---- Image Upload ----
+CONF_IMAGE_UPLOAD_ENABLED = "image_upload_enabled"
+RECOMMENDED_IMAGE_UPLOAD_ENABLED: bool = True
+CONF_IMAGE_ANALYSIS_PROMPT = "image_analysis_prompt"
+IMAGE_ANALYSIS_DEFAULT_PROMPT = """Analyze this image in the context of home automation.
+Focus on:
+- Identifying any devices, appliances, or home automation equipment visible
+- Detecting potential issues or anomalies (e.g., lights left on, doors/windows open, unusual objects)
+- Describing the scene in a way that would be useful for home monitoring or automation
+- Noting any safety concerns or maintenance needs
+- Identifying people, pets, or movement if relevant to home security
+
+Provide a clear, concise description that would help with home automation decisions."""
+IMAGE_MAX_SIZE_MB = 10
+IMAGE_ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+
 # --- Gemini API key (used in config_flow/__init__.py) ---
 CONF_GEMINI_API_KEY = "gemini_api_key"
 
