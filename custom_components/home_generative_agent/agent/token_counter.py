@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import Any, Literal
 
-import requests
+import httpx
 import tiktoken
 from langchain_core.messages import BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
@@ -150,12 +150,11 @@ def _count_gemini_tokens(
     }
 
     try:
-        response = requests.post(
-            url, params={"key": gemini_api_key}, json=payload, timeout=timeout
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.RequestException as exc:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, params={"key": gemini_api_key}, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
         msg = f"Gemini countTokens failed: {exc!s}"
         raise RuntimeError(msg) from exc
 
@@ -172,13 +171,14 @@ def _count_ollama_tokens_via_tokenize(
     """Fast path using /api/tokenize. Return None if not available."""
     url = f"{base_url.rstrip('/')}/api/tokenize"
     try:
-        r = requests.post(url, json={"model": model, "prompt": prompt}, timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-        tokens = data.get("tokens")
-        if isinstance(tokens, list):
-            return len(tokens)
-    except requests.RequestException:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(url, json={"model": model, "prompt": prompt})
+            r.raise_for_status()
+            data = r.json()
+            tokens = data.get("tokens")
+            if isinstance(tokens, list):
+                return len(tokens)
+    except httpx.HTTPError:
         return None
     return None
 
@@ -210,14 +210,19 @@ def _count_ollama_tokens(
     opts["num_predict"] = 0
 
     try:
-        r = requests.post(
-            url,
-            json={"model": model, "prompt": combined, "stream": False, "options": opts},
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except requests.RequestException as exc:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(
+                url,
+                json={
+                    "model": model,
+                    "prompt": combined,
+                    "stream": False,
+                    "options": opts,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPError as exc:
         msg = f"Ollama /api/generate failed: {exc!s}"
         raise RuntimeError(msg) from exc
 
