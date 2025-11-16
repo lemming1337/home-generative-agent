@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -76,9 +77,11 @@ async def add_automation(  # noqa: D417
                 },
             },
         }
-        automation_yaml = yaml.dump(automation_data)
+        automation_yaml = await hass.async_add_executor_job(yaml.dump, automation_data)
 
-    automation_parsed = yaml.safe_load(automation_yaml)
+    automation_parsed = await hass.async_add_executor_job(
+        yaml.safe_load, automation_yaml
+    )
     ha_automation_config: dict[str, Any] = {"id": ulid.ulid_now()}
     if isinstance(automation_parsed, list):
         ha_automation_config.update(automation_parsed[0])
@@ -99,15 +102,18 @@ async def add_automation(  # noqa: D417
         Path(hass.config.config_dir) / AUTOMATION_CONFIG_PATH, encoding="utf-8"
     ) as f:
         ha_exsiting_automation_configs = await f.read()
-        ha_exsiting_automations_yaml = yaml.safe_load(ha_exsiting_automation_configs)
+        ha_exsiting_automations_yaml = await hass.async_add_executor_job(
+            yaml.safe_load, ha_exsiting_automation_configs
+        )
 
     async with aiofiles.open(
         Path(hass.config.config_dir) / AUTOMATION_CONFIG_PATH,
         "a" if ha_exsiting_automations_yaml else "w",
         encoding="utf-8",
     ) as f:
-        ha_automation_config_raw = yaml.dump(
-            [ha_automation_config], allow_unicode=True, sort_keys=False
+        ha_automation_config_raw = await hass.async_add_executor_job(
+            partial(yaml.dump, allow_unicode=True, sort_keys=False),
+            [ha_automation_config],
         )
         await f.write("\n" + ha_automation_config_raw)
 
