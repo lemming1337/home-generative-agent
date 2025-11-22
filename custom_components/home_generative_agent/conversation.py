@@ -167,8 +167,15 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
     ) -> conversation.ConversationResult:
         """Process a sentence and return final result by consuming the AsyncGenerator."""
         # Create a minimal chat_log object that _async_handle_message expects
-        # The chat_log parameter is used by HA's native implementation but not by ours
-        chat_log = type("ChatLog", (), {})()  # Empty object placeholder
+        # The chat_log has content (list of messages) and conversation_id attributes
+        chat_log = type(
+            "ChatLog",
+            (),
+            {
+                "content": [],  # Empty message history
+                "conversation_id": user_input.conversation_id,
+            },
+        )()
 
         # Consume the AsyncGenerator and return the last result
         final_result = None
