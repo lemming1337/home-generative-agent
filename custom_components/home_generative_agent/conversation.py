@@ -162,6 +162,33 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         """Return True if the agent supports streaming responses."""
         return True
 
+    async def async_process(
+        self, user_input: conversation.ConversationInput
+    ) -> conversation.ConversationResult:
+        """Process a sentence and return final result by consuming the AsyncGenerator."""
+        # Create a minimal chat_log object that _async_handle_message expects
+        # The chat_log parameter is used by HA's native implementation but not by ours
+        chat_log = type("ChatLog", (), {})()  # Empty object placeholder
+
+        # Consume the AsyncGenerator and return the last result
+        final_result = None
+        async for result in self._async_handle_message(user_input, chat_log):
+            final_result = result
+
+        if final_result is None:
+            # Fallback if no results were yielded
+            intent_response = intent.IntentResponse(language=user_input.language)
+            intent_response.async_set_error(
+                intent.IntentResponseErrorCode.UNKNOWN,
+                "No response generated",
+            )
+            return conversation.ConversationResult(
+                response=intent_response,
+                conversation_id=user_input.conversation_id or "",
+            )
+
+        return final_result
+
     async def _async_handle_message(  # noqa: PLR0915
         self,
         user_input: conversation.ConversationInput,
