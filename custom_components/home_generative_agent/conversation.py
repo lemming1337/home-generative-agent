@@ -209,9 +209,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             msg = "Error getting LLM API, check your configuration."
             LOGGER.exception(msg)
             intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, msg)
-            return conversation.ConversationResult(
+            yield conversation.ConversationResult(
                 response=intent_response, conversation_id=user_input.conversation_id
             )
+            return
 
         tools = [
             _format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools
@@ -272,9 +273,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 intent.IntentResponseErrorCode.UNKNOWN,
                 f"Sorry, I had a problem with my template: {err}",
             )
-            return conversation.ConversationResult(
+            yield conversation.ConversationResult(
                 response=intent_response, conversation_id=conversation_id
             )
+            return
 
         if llm_api:
             prompt_parts.append(llm_api.api_prompt)
@@ -292,9 +294,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 intent.IntentResponseErrorCode.UNKNOWN,
                 f"Model must support tool calling, model = {type(base_llm).__name__}",
             )
-            return conversation.ConversationResult(
+            yield conversation.ConversationResult(
                 response=intent_response, conversation_id=conversation_id
             )
+            return
 
         # A user name of None indicates an automation is being run.
         user_name = "robot" if user_name is None else user_name
@@ -332,9 +335,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 intent.IntentResponseErrorCode.UNKNOWN,
                 f"Tool call rate limit exceeded. Please try again in {int(reset_seconds)} seconds.",
             )
-            return conversation.ConversationResult(
+            yield conversation.ConversationResult(
                 response=intent_response, conversation_id=conversation_id
             )
+            return
 
         # Compile graph into a LangChain Runnable.
         app = workflow.compile(
