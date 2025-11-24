@@ -378,13 +378,13 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         # Convert Markdown to HTML for better formatting in Home Assistant
         response_content = response["messages"][-1].content
 
-        html_content = await hass.async_add_executor_job(
-            partial(
-                markdown.markdown,
-                response_content,
-                extensions=["fenced_code", "tables", "nl2br"],
-            )
-        )
+        #html_content = await hass.async_add_executor_job(
+        #    partial(
+        #        markdown.markdown,
+        #        response_content,
+        #        extensions=["fenced_code", "tables", "nl2br"],
+        #    )
+        #)
 
         # Collapse multiple spaces and newlines
         cleaned_response = re.sub(r"\s+", " ", response_content).strip()
@@ -394,7 +394,7 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             cleaned_response,
             extra_data={
                 "original_response": response_content,
-                "html_content": html_content,
+                #"html_content": html_content,
             },
         )
 
