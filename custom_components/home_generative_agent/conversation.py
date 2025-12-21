@@ -397,8 +397,12 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
 
         # Add assistant response to chat log for follow-up question detection
         # This enables HA 2025.4+ continued conversation feature
+        # HA automatically detects if content ends with "?" or ";" for follow-ups
         chat_log.async_add_assistant_content_without_tools(
-            content=conversation.AssistantContent(content=response_content),
+            conversation.AssistantContent(
+                agent_id=self.entry.entry_id,
+                content=response_content,
+            )
         )
 
         return conversation.ConversationResult(
