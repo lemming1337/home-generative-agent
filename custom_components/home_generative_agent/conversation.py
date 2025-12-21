@@ -398,7 +398,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         # Add assistant response to chat log for follow-up question detection
         # This enables HA 2025.4+ continued conversation feature
         chat_log.async_add_assistant_content_without_tools(
-            content=conversation.AssistantContent(content=response_content),
+            content=conversation.AssistantContent(
+                content=response_content,
+                agent_id=self.entry.entry_id,
+            ),
         )
 
         return conversation.ConversationResult(
