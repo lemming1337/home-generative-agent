@@ -7,9 +7,7 @@ import re
 import string
 from typing import TYPE_CHECKING, Any, Literal
 
-from functools import partial
 
-import markdown
 import homeassistant.util.dt as dt_util
 from homeassistant.components import conversation
 from homeassistant.components.conversation import trace
@@ -209,8 +207,7 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             )
 
         tools = [
-            _format_tool(tool, llm_api.custom_serializer)
-            for tool in llm_api.tools
+            _format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools
         ]
 
         # Add LangChain-native tools (wired in graph via config).
@@ -378,13 +375,13 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         # Convert Markdown to HTML for better formatting in Home Assistant
         response_content = response["messages"][-1].content
 
-        #html_content = await hass.async_add_executor_job(
+        # html_content = await hass.async_add_executor_job(
         #    partial(
         #        markdown.markdown,
         #        response_content,
         #        extensions=["fenced_code", "tables", "nl2br"],
         #    )
-        #)
+        # )
 
         # Collapse multiple spaces and newlines
         cleaned_response = re.sub(r"\s+", " ", response_content).strip()
@@ -394,12 +391,21 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             cleaned_response,
             extra_data={
                 "original_response": response_content,
-                #"html_content": html_content,
+                # "html_content": html_content,
             },
         )
 
+        # Add assistant response to chat log for follow-up question detection
+        # This enables HA 2025.4+ continued conversation feature
+        chat_log.async_add_assistant_content_without_tools(
+            agent_id=self.entry.entry_id,
+            content=response_content,
+        )
+
         return conversation.ConversationResult(
-            response=intent_response, conversation_id=conversation_id
+            response=intent_response,
+            conversation_id=chat_log.conversation_id,
+            continue_conversation=chat_log.continue_conversation,
         )
 
     async def _async_entry_update_listener(
