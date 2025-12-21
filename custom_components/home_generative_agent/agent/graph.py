@@ -27,6 +27,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.utils import trim_messages
 from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
 from ..const import (  # noqa: TID252
@@ -508,13 +509,79 @@ async def _call_tools(
     return {"messages": tool_responses}
 
 
+async def _confirm_automation(
+    state: State, config: RunnableConfig
+) -> Command[Literal["action", "agent"]]:
+    """Ask user to confirm automation creation before proceeding.
+
+    This implements human-in-the-loop for safety-critical operations.
+    Uses LangGraph's interrupt() to pause execution and wait for user response.
+    """
+    if "configurable" not in config:
+        msg = "Configuration is missing."
+        raise HomeAssistantError(msg)
+
+    messages = state["messages"]
+    if not isinstance(messages[-1], AIMessage):
+        # No AI message, skip confirmation
+        return Command(goto="action")
+
+    tool_calls = messages[-1].tool_calls or []
+
+    # Check if any tool call is for add_automation
+    automation_calls = [tc for tc in tool_calls if tc["name"] == "add_automation"]
+
+    if not automation_calls:
+        # No automation being created, proceed normally
+        return Command(goto="action")
+
+    # Extract automation details for display
+    automation_call = automation_calls[0]
+    args = automation_call.get("args", {})
+
+    # Format confirmation message
+    if "yaml_config" in args:
+        automation_preview = args["yaml_config"][:500]  # Limit preview length
+        question = (
+            f"Ich möchte eine Automation erstellen:\n\n"
+            f"```yaml\n{automation_preview}\n```\n\n"
+            f"Soll ich diese Automation erstellen? (ja/nein)"
+        )
+    elif "blueprint_name" in args:
+        blueprint_name = args.get("blueprint_name", "")
+        blueprint_inputs = args.get("blueprint_inputs", {})
+        question = (
+            f"Ich möchte eine Automation mit Blueprint '{blueprint_name}' erstellen.\n"
+            f"Inputs: {blueprint_inputs}\n\n"
+            f"Soll ich diese Automation erstellen? (ja/nein)"
+        )
+    else:
+        question = "Soll ich eine Automation erstellen? (ja/nein)"
+
+    # Pause execution and wait for user response
+    LOGGER.info("Requesting user confirmation for automation creation")
+    user_response = interrupt(question)
+
+    # Check user response
+    if user_response and str(user_response).lower().strip() in ["ja", "yes", "j", "y"]:
+        LOGGER.info("User confirmed automation creation")
+        return Command(goto="action")
+    else:
+        LOGGER.info("User cancelled automation creation")
+        # Add cancellation message to state
+        cancellation_msg = AIMessage(
+            content="Die Automation-Erstellung wurde abgebrochen."
+        )
+        return Command(update={"messages": [cancellation_msg]}, goto="agent")
+
+
 def _should_continue(
     state: State,
-) -> Literal["action", "summarize_and_remove_messages"]:
+) -> Literal["confirm_automation", "summarize_and_remove_messages"]:
     """Return the next node in graph to execute."""
     messages = state["messages"]
     if isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
-        return "action"
+        return "confirm_automation"
     return "summarize_and_remove_messages"
 
 
@@ -523,6 +590,7 @@ workflow = StateGraph(State)
 
 # Define nodes.
 workflow.add_node("agent", _call_model)
+workflow.add_node("confirm_automation", _confirm_automation)
 workflow.add_node("action", _call_tools)
 workflow.add_node("summarize_and_remove_messages", _summarize_and_remove_messages)
 
