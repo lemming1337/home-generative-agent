@@ -311,10 +311,9 @@ async def _call_tools(
 
     langchain_tools = config["configurable"]["langchain_tools"]
     ha_llm_api = config["configurable"]["ha_llm_api"]
-    hass = config["configurable"].get("hass")
 
-    # Initialize metrics collector if available
-    metrics_collector = getattr(hass, "_hga_tool_metrics", None)
+    # Get metrics collector from config
+    metrics_collector = config["configurable"].get("metrics_collector")
 
     # Expect tool calls in the last AIMessage.
     if not state["messages"] or not isinstance(state["messages"][-1], AIMessage):

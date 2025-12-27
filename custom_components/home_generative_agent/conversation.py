@@ -138,8 +138,6 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         """When entity is added to Home Assistant."""
         await super().async_added_to_hass()
         conversation.async_set_agent(self.hass, self.entry, self)
-        # Make metrics collector available to graph nodes
-        self.hass._hga_tool_metrics = self.metrics_collector
         LOGGER.debug(
             "Tool metrics collector initialized with %d minute retention",
             60,
@@ -308,6 +306,7 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 "langchain_tools": langchain_tools,
                 "ha_llm_api": llm_api or None,
                 "hass": hass,
+                "metrics_collector": self.metrics_collector,
             },
             "recursion_limit": 10,
         }
