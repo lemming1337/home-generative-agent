@@ -221,7 +221,14 @@ SUMMARIZATION_MODEL_REPEAT_PENALTY = 1.05  # Ollama only
 SUMMARIZATION_MIRO_STAT = 0  # Ollama only
 SUMMARIZATION_MODEL_OLLAMA_SUPPORTED = Literal["qwen3:1.7b", "qwen3:8b"]
 SUMMARIZATION_MODEL_OPENAI_SUPPORTED = Literal[
-    "gpt-5-nano", "gpt-4.1", "gpt-4.1-nano", "Qwen3-Coder-30B-A3B-Instruct-Q8_0"
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-nano",
+    "Qwen3-Coder-30B-A3B-Instruct-Q8_0",
+    "Ministral-3-14B-Reasoning-2512-BF16",
+    "Ministral-3-8B-Instruct-2512-BF16",
+    "Qwen3-Next-80B-A3B-Thinking",
+    "gpt-oss-20b-F16",
 ]
 SUMMARIZATION_MODEL_GEMINI_SUPPORTED = Literal[
     "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"
