@@ -82,14 +82,15 @@ CHAT_MODEL_REPEAT_PENALTY = 1.05  # Ollama only
 # Add more models by extending the Literal types.
 CHAT_MODEL_OLLAMA_SUPPORTED = Literal["gpt-oss", "qwen2.5:32b", "qwen3:32b", "qwen3:8b"]
 CHAT_MODEL_OPENAI_SUPPORTED = Literal[
-    "gpt-5",
-    "gpt-5-mini",
     "gpt-5-nano",
-    "gpt-4o",
     "gpt-4.1",
-    "o4-mini",
+    "gpt-4.1-nano",
     "Qwen3-Coder-30B-A3B-Instruct-Q8_0",
-    "gemma-3-27b-it-Q8_0",
+    "Ministral-3-14B-Reasoning-2512-BF16",
+    "Ministral-3-8B-Instruct-2512-BF16",
+    "Qwen3-Next-80B-A3B-Thinking",
+    "gpt-oss-20b-F16",
+    "Devstral-Small-2-24B-Instruct-2512",
 ]
 CHAT_MODEL_GEMINI_SUPPORTED = Literal[
     "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"
@@ -131,14 +132,7 @@ VLM_REPEAT_PENALTY = 1.05  # Ollama only
 VLM_MIRO_STAT = 0  # Ollama only
 VLM_OLLAMA_SUPPORTED = Literal["qwen2.5vl:7b", "qwen3-vl:8b"]
 VLM_OPENAI_SUPPORTED = Literal[
-    "gpt-5-nano",
-    "gpt-4.1",
-    "gpt-4.1-nano",
-    "Qwen3-Coder-30B-A3B-Instruct-Q8_0",
-    "Ministral-3-14B-Reasoning-2512-BF16",
-    "Ministral-3-8B-Instruct-2512-BF16",
-    "Qwen3-Next-80B-A3B-Thinking",
-    "gpt-oss-20b-F16",
+    "gpt-5-nano", "gpt-4.1", "gpt-4.1-nano", "gemma-3-27b-it-Q8_0"
 ]
 VLM_GEMINI_SUPPORTED = Literal[
     "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"
@@ -236,6 +230,7 @@ SUMMARIZATION_MODEL_OPENAI_SUPPORTED = Literal[
     "Ministral-3-8B-Instruct-2512-BF16",
     "Qwen3-Next-80B-A3B-Thinking",
     "gpt-oss-20b-F16",
+    "Devstral-Small-2-24B-Instruct-2512",
 ]
 SUMMARIZATION_MODEL_GEMINI_SUPPORTED = Literal[
     "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"
