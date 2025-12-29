@@ -5,7 +5,7 @@ import logging
 from collections import Counter
 from typing import Any
 
-import ulid
+from homeassistant.util import ulid
 from langchain_core.messages import AIMessage, ToolMessage
 
 
@@ -16,7 +16,7 @@ def create_run_id() -> str:
     Returns:
         str: Last 8 characters of a ULID (e.g., "xyz789ab")
     """
-    return str(ulid.ulid())[-8:]
+    return str(ulid.ulid_now())[-8:]
 
 
 def format_message_for_log(message: Any, max_content_length: int = 500) -> str:
