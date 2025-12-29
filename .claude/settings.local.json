@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bash scripts/lint:*)"
+      "Bash(bash scripts/lint:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

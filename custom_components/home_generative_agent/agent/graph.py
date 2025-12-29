@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 import logging
+from collections import Counter
 from enum import Enum
 from functools import partial
 from typing import (
@@ -44,6 +45,11 @@ from ..const import (  # noqa: TID252
     SUMMARIZATION_SYSTEM_PROMPT,
     TOOL_CALL_ERROR_TEMPLATE,
     TOOL_CALL_TIMEOUT_SECONDS,
+)
+from ..core.logging_utils import (  # noqa: TID252
+    format_message_for_log,
+    format_messages_summary,
+    log_with_context,
 )
 from ..core.utils import extract_final  # noqa: TID252
 from .token_counter import count_tokens_cross_provider
@@ -155,8 +161,12 @@ async def _call_model(
         msg = "Configuration for the model is missing."
         raise HomeAssistantError(msg)
 
-    model = config["configurable"]["chat_model"]
+    # Extract context for logging
+    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
+    run_id = config.get("configurable", {}).get("run_id", "unknown")
     user_id = config["configurable"]["user_id"]
+
+    model = config["configurable"]["chat_model"]
     hass = config["configurable"]["hass"]
     opts = config["configurable"]["options"]
     chat_model_options = config["configurable"].get("chat_model_options", {})
@@ -227,11 +237,26 @@ async def _call_model(
         )
     )
 
-    LOGGER.debug("Model call messages: %s", trimmed_messages)
-    LOGGER.debug("Model call messages length: %s", len(trimmed_messages))
+    # Log input messages summary
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"Calling model with messages:\n{format_messages_summary(trimmed_messages, title='Input messages')}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="agent",
+    )
 
     raw_response = await model.ainvoke(trimmed_messages)
-    LOGGER.debug("Raw chat model response: %s", raw_response)
+
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"Raw model response: {format_message_for_log(raw_response, max_content_length=300)}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="agent",
+    )
 
     response = extract_final(getattr(raw_response, "content", "") or "")
 
@@ -240,15 +265,61 @@ async def _call_model(
         ai_response = AIMessage(content=response, tool_calls=raw_response.tool_calls)
     else:
         ai_response = AIMessage(content=response)
-    LOGGER.debug("AI response: %s", ai_response)
+
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"AI response created: {format_message_for_log(ai_response, max_content_length=300)}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="agent",
+    )
 
     metadata: dict[str, str] = (
         raw_response.usage_metadata if hasattr(raw_response, "usage_metadata") else {}
     )
-    LOGGER.debug("Token counts from metadata: %s", metadata)
 
-    messages_to_remove = [m for m in state["messages"] if m not in trimmed_messages]
-    LOGGER.debug("Messages to remove: %s", messages_to_remove)
+    if metadata:
+        log_with_context(
+            LOGGER,
+            logging.DEBUG,
+            "Token usage from metadata",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="agent",
+            **metadata,
+        )
+
+    # Calculate messages to remove using ID-based comparison (more robust than equality)
+    total_messages = len(state["messages"])
+    trimmed_count = len(trimmed_messages)
+    trimmed_ids = {id(m) for m in trimmed_messages}
+    messages_to_remove = [m for m in state["messages"] if id(m) not in trimmed_ids]
+
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        "Message trimming",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="agent",
+        total_messages=total_messages,
+        kept_messages=trimmed_count,
+        to_remove=len(messages_to_remove),
+    )
+
+    # Warning if something looks wrong
+    if len(messages_to_remove) == 0 and trimmed_count < total_messages:
+        log_with_context(
+            LOGGER,
+            logging.WARNING,
+            "Trimming occurred but messages_to_remove is empty!",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="agent",
+            total_messages=total_messages,
+            trimmed_count=trimmed_count,
+        )
 
     return {
         "messages": ai_response,
@@ -265,10 +336,27 @@ async def _summarize_and_remove_messages(
         msg = "Configuration is missing."
         raise HomeAssistantError(msg)
 
+    # Extract context for logging
+    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
+    run_id = config.get("configurable", {}).get("run_id", "unknown")
+
     summary = state.get("summary", "")
     msgs_to_remove = state.get("messages_to_remove", [])
+
     if not msgs_to_remove:
+        log_with_context(
+            LOGGER,
+            logging.DEBUG,
+            "No messages to summarize",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="summarize",
+        )
         return {"summary": summary}
+
+    # Count message types before filtering
+    total_to_remove = len(msgs_to_remove)
+    type_counts = Counter(type(m).__name__ for m in msgs_to_remove)
 
     summary_message = (
         SUMMARIZATION_PROMPT_TEMPLATE.format(summary=summary)
@@ -277,18 +365,48 @@ async def _summarize_and_remove_messages(
     )
 
     # Build messages for the already-configured summarization model.
+    # Only include HumanMessage and AIMessage (filter out System, Tool, etc.)
+    filtered_messages = [
+        m for m in msgs_to_remove if isinstance(m, (HumanMessage, AIMessage))
+    ]
     messages = (
         [SystemMessage(content=SUMMARIZATION_SYSTEM_PROMPT)]
-        + [m for m in msgs_to_remove if isinstance(m, (HumanMessage, AIMessage))]
+        + filtered_messages
         + [HumanMessage(content=summary_message)]
     )
 
+    # Log what's being summarized
+    type_summary = ", ".join(
+        f"{count} {msg_type}" for msg_type, count in sorted(type_counts.items())
+    )
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"Summarizing messages:\n{format_messages_summary(filtered_messages, title='Messages to summarize')}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="summarize",
+        total_to_remove=total_to_remove,
+        filtered_for_summary=len(filtered_messages),
+        types=type_summary,
+    )
+
     model = config["configurable"]["summarization_model"]
-    LOGGER.debug("Summary messages: %s", messages)
     raw_response = await model.ainvoke(messages)
-    LOGGER.debug("Raw summary response: %s", raw_response)
 
     response = extract_final(getattr(raw_response, "content", "") or "")
+
+    # Log summary result
+    summary_preview = response[:200] + "..." if len(response) > 200 else response
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"Summary created ({len(response)} chars): {summary_preview}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="summarize",
+        messages_removed=total_to_remove,
+    )
 
     return {
         "summary": response,
@@ -309,6 +427,10 @@ async def _call_tools(
         msg = "Configuration is missing."
         raise HomeAssistantError(msg)
 
+    # Extract context for logging
+    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
+    run_id = config.get("configurable", {}).get("run_id", "unknown")
+
     langchain_tools = config["configurable"]["langchain_tools"]
     ha_llm_api = config["configurable"]["ha_llm_api"]
 
@@ -327,7 +449,21 @@ async def _call_tools(
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         tool_id = tool_call.get("id") or ""
-        LOGGER.debug("Tool call: %s(%s)", tool_name, tool_args)
+
+        # Log tool call with structured args
+        args_summary = json.dumps(tool_args, ensure_ascii=False)[:200]
+        if len(json.dumps(tool_args)) > 200:
+            args_summary += "..."
+        log_with_context(
+            LOGGER,
+            logging.DEBUG,
+            f"Calling tool {tool_name}",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="action",
+            tool_id=tool_id,
+            args=args_summary,
+        )
 
         # Create metric for this call
         metric = None
@@ -343,11 +479,17 @@ async def _call_tools(
         ) -> ToolMessage:
             """Create error response with classification."""
             error_msg = str(err)
-            LOGGER.warning(
-                "Tool error [%s] in %s: %s",
-                error_type.value,
-                name,
-                error_msg,
+            log_with_context(
+                LOGGER,
+                logging.WARNING,
+                f"Tool error in {name}",
+                conversation_id=conversation_id,
+                run_id=run_id,
+                node="action",
+                tool_name=name,
+                tool_id=tid,
+                error_type=error_type.value,
+                error=error_msg[:200],
             )
             message = TOOL_CALL_ERROR_TEMPLATE.format(error=error_msg)
             return ToolMessage(
@@ -375,7 +517,22 @@ async def _call_tools(
                         success=True,
                         response_size_bytes=response_size,
                     )
-                LOGGER.debug("LangChain tool response: %s", tool_response)
+
+                # Log tool response with truncation
+                response_preview = str(tool_response)[:300]
+                if len(str(tool_response)) > 300:
+                    response_preview += "..."
+                log_with_context(
+                    LOGGER,
+                    logging.DEBUG,
+                    f"LangChain tool {tool_name} response",
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    node="action",
+                    tool_id=tool_id,
+                    response_size=len(str(tool_response)),
+                    response_preview=response_preview,
+                )
             except asyncio.TimeoutError:
                 error_type = ToolErrorType.TIMEOUT
                 if metric:
@@ -415,7 +572,17 @@ async def _call_tools(
                         error_type=error_type.value,
                         error_message=str(err),
                     )
-                LOGGER.exception("Unexpected error in LangChain tool")
+                log_with_context(
+                    LOGGER,
+                    logging.ERROR,
+                    f"Unexpected error in LangChain tool {tool_name}",
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    node="action",
+                    tool_id=tool_id,
+                    error=str(err)[:200],
+                    exc_info=True,
+                )
                 tool_response = _handle_tool_error(
                     err,
                     tool_name,
@@ -442,7 +609,30 @@ async def _call_tools(
                         success=True,
                         response_size_bytes=response_size,
                     )
-                LOGGER.debug("HA tool response: %s", tool_response)
+
+                # Log HA tool response with truncation
+                # Parse JSON content for better readability
+                try:
+                    parsed_content = json.loads(tool_response.content)
+                    content_preview = json.dumps(parsed_content, ensure_ascii=False)[
+                        :300
+                    ]
+                except (json.JSONDecodeError, TypeError):
+                    content_preview = str(tool_response.content)[:300]
+                if len(str(tool_response.content)) > 300:
+                    content_preview += "..."
+
+                log_with_context(
+                    LOGGER,
+                    logging.DEBUG,
+                    f"HA tool {tool_name} response",
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    node="action",
+                    tool_id=tool_id,
+                    response_size=len(str(tool_response.content)),
+                    response_preview=content_preview,
+                )
             except asyncio.TimeoutError:
                 error_type = ToolErrorType.TIMEOUT
                 if metric:
@@ -482,7 +672,17 @@ async def _call_tools(
                         error_type=error_type.value,
                         error_message=str(err),
                     )
-                LOGGER.exception("Unexpected error in HA tool")
+                log_with_context(
+                    LOGGER,
+                    logging.ERROR,
+                    f"Unexpected error in HA tool {tool_name}",
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    node="action",
+                    tool_id=tool_id,
+                    error=str(err)[:200],
+                    exc_info=True,
+                )
                 tool_response = _handle_tool_error(
                     err,
                     tool_name,
@@ -490,19 +690,24 @@ async def _call_tools(
                     error_type,
                 )
 
-        LOGGER.debug("Tool response: %s", tool_response)
+        # Append to responses
         tool_responses.append(tool_response)
 
     # Log metrics summary if available
     if metrics_collector:
         summary = metrics_collector.get_summary()
         if summary["total_calls"] > 0:
-            LOGGER.debug(
-                "Tool metrics - Total: %d, Success: %d, Failed: %d, Rate: %.1f%%",
-                summary["total_calls"],
-                summary["successful_calls"],
-                summary["failed_calls"],
-                summary["success_rate"] * 100,
+            log_with_context(
+                LOGGER,
+                logging.DEBUG,
+                "Tool execution summary",
+                conversation_id=conversation_id,
+                run_id=run_id,
+                node="action",
+                total_calls=summary["total_calls"],
+                successful=summary["successful_calls"],
+                failed=summary["failed_calls"],
+                success_rate=f"{summary['success_rate'] * 100:.1f}%",
             )
 
     return {"messages": tool_responses}
@@ -519,6 +724,10 @@ async def _confirm_automation(
     if "configurable" not in config:
         msg = "Configuration is missing."
         raise HomeAssistantError(msg)
+
+    # Extract context for logging
+    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
+    run_id = config.get("configurable", {}).get("run_id", "unknown")
 
     messages = state["messages"]
     if not isinstance(messages[-1], AIMessage):
@@ -558,15 +767,36 @@ async def _confirm_automation(
         question = "Soll ich eine Automation erstellen? (ja/nein)"
 
     # Pause execution and wait for user response
-    LOGGER.info("Requesting user confirmation for automation creation")
+    log_with_context(
+        LOGGER,
+        logging.INFO,
+        "Requesting user confirmation for automation creation",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="confirm_automation",
+    )
     user_response = interrupt(question)
 
     # Check user response
     if user_response and str(user_response).lower().strip() in ["ja", "yes", "j", "y"]:
-        LOGGER.info("User confirmed automation creation")
+        log_with_context(
+            LOGGER,
+            logging.INFO,
+            "User confirmed automation creation",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="confirm_automation",
+        )
         return Command(goto="action")
     else:
-        LOGGER.info("User cancelled automation creation")
+        log_with_context(
+            LOGGER,
+            logging.INFO,
+            "User cancelled automation creation",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="confirm_automation",
+        )
         # Add cancellation message to state
         cancellation_msg = AIMessage(
             content="Die Automation-Erstellung wurde abgebrochen."

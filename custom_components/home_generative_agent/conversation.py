@@ -39,6 +39,7 @@ from .const import (
     TOOL_CALL_RATE_LIMIT_PER_MINUTE,
     TOOL_CALL_ERROR_SYSTEM_MESSAGE,
 )
+from .core.logging_utils import create_run_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -223,6 +224,10 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         )
         LOGGER.debug("Conversation ID: %s", conversation_id)
 
+        # Generate unique run ID for this invocation
+        run_id = create_run_id()
+        LOGGER.debug("Run ID: %s", run_id)
+
         # Resolve user name (None means automation)
         if (
             user_input.context
@@ -292,6 +297,7 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
         app_config: RunnableConfig = {
             "configurable": {
                 "thread_id": conversation_id,
+                "run_id": run_id,
                 "user_id": user_name,
                 "chat_model": chat_model_with_tools,
                 "chat_model_options": runtime_data.chat_model_options,

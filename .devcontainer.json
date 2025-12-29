@@ -37,5 +37,7 @@
         }
     },
     "remoteUser": "vscode",
-    "features": {}
+    "features": {
+        "ghcr.io/devcontainers-extra/features/claude-code:1": {}
+    }
 }
