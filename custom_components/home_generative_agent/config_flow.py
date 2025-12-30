@@ -409,6 +409,76 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
                 )
             ] = NumberSelector(NumberSelectorConfig(min=0, max=2, step=0.05))
 
+    # Loki/InfluxDB logging configuration
+    schema[
+        vol.Optional(
+            "loki_enabled",
+            description={"suggested_value": opts.get("loki_enabled", False)},
+            default=False,
+        )
+    ] = BooleanSelector()
+
+    schema[
+        vol.Optional(
+            "loki_url",
+            description={"suggested_value": opts.get("loki_url", "")},
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
+
+    schema[
+        vol.Optional(
+            "loki_batch_size",
+            description={"suggested_value": opts.get("loki_batch_size", 50)},
+            default=50,
+        )
+    ] = NumberSelector(NumberSelectorConfig(min=1, max=500, step=1))
+
+    schema[
+        vol.Optional(
+            "loki_batch_interval",
+            description={"suggested_value": opts.get("loki_batch_interval", 10)},
+            default=10,
+        )
+    ] = NumberSelector(NumberSelectorConfig(min=1, max=60, step=1))
+
+    schema[
+        vol.Optional(
+            "influx_metrics_enabled",
+            description={"suggested_value": opts.get("influx_metrics_enabled", False)},
+            default=False,
+        )
+    ] = BooleanSelector()
+
+    schema[
+        vol.Optional(
+            "influx_url",
+            description={"suggested_value": opts.get("influx_url", "")},
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.URL))
+
+    schema[
+        vol.Optional(
+            "influx_token",
+            description={"suggested_value": opts.get("influx_token", "")},
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+    schema[
+        vol.Optional(
+            "influx_org",
+            description={"suggested_value": opts.get("influx_org", "smarthome")},
+            default="smarthome",
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+
+    schema[
+        vol.Optional(
+            "influx_bucket",
+            description={"suggested_value": opts.get("influx_bucket", "home_assistant")},
+            default="home_assistant",
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+
     return schema
 
 

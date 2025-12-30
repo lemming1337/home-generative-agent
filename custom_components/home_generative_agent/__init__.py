@@ -827,11 +827,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
         schema=ENROLL_SCHEMA,
     )
 
+    # Initialize Loki/InfluxDB logging
+    from .core.logging_utils import initialize_loki_logging
+
+    loki_config = {
+        "loki_enabled": entry.options.get("loki_enabled", False),
+        "loki_url": entry.options.get("loki_url", ""),
+        "loki_batch_size": entry.options.get("loki_batch_size", 50),
+        "loki_batch_interval": entry.options.get("loki_batch_interval", 10),
+        "loki_buffer_path": entry.options.get(
+            "loki_buffer_path",
+            f"{hass.config.config_dir}/logs/generative_agent"
+        ),
+        "influx_metrics_enabled": entry.options.get("influx_metrics_enabled", False),
+        "influx_url": entry.options.get("influx_url", ""),
+        "influx_token": entry.options.get("influx_token", ""),
+        "influx_org": entry.options.get("influx_org", "smarthome"),
+        "influx_bucket": entry.options.get("influx_bucket", "home_assistant"),
+    }
+
+    # Only initialize if enabled and URL configured
+    if loki_config["loki_enabled"] and loki_config["loki_url"]:
+        try:
+            initialize_loki_logging(loki_config)
+            _LOGGER.info("Loki/InfluxDB integration initialized")
+        except Exception as e:
+            _LOGGER.error(f"Failed to initialize Loki/InfluxDB: {e}")
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
     """Unload the config entry."""
+    # Shutdown Loki/InfluxDB handlers
+    from .core.logging_utils import shutdown_loki_logging
+    try:
+        await shutdown_loki_logging()
+        _LOGGER.info("Loki/InfluxDB handlers shut down")
+    except Exception as e:
+        _LOGGER.error(f"Error shutting down Loki/InfluxDB: {e}")
+
     await entry.runtime_data.pool.close()
     await entry.runtime_data.video_analyzer.stop()
     await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

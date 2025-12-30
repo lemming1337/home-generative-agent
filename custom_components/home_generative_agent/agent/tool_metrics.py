@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -118,10 +119,46 @@ class ToolMetricsCollector:
         self.retention = timedelta(minutes=retention_minutes)
         self.metrics: list[ToolCallMetrics] = []
 
+        # Get InfluxDB handler reference
+        from ..core.logging_utils import get_influx_handler
+        self.influx_handler = get_influx_handler()
+
     def add_metric(self, metric: ToolCallMetrics) -> None:
         """Add a tool call metric."""
         self.metrics.append(metric)
         self._cleanup_old_metrics()
+
+        # Send to InfluxDB if handler is available and metric is finalized
+        if self.influx_handler and metric.duration_ms is not None:
+            try:
+                tags = {
+                    "tool_name": metric.tool_name,
+                    "success": str(metric.success) if metric.success is not None else "unknown",
+                }
+
+                # Add error_type as tag if present
+                if metric.error_type:
+                    tags["error_type"] = metric.error_type
+
+                fields = {
+                    "duration_ms": metric.duration_ms,
+                    "success_count": 1 if metric.success else 0,
+                    "error_count": 0 if metric.success else 1,
+                }
+
+                # Add response size if available
+                if metric.response_size_bytes is not None:
+                    fields["response_size_bytes"] = metric.response_size_bytes
+
+                # Queue metric (non-blocking)
+                loop = asyncio.get_event_loop()
+                loop.create_task(
+                    self.influx_handler.queue_metric("tool_execution", fields, tags)
+                )
+
+            except Exception as e:
+                # Don't break normal operation if InfluxDB fails
+                LOGGER.debug(f"Failed to queue InfluxDB metric: {e}")
 
     def _cleanup_old_metrics(self) -> None:
         """Remove metrics older than retention period."""

@@ -1,12 +1,20 @@
 """Logging utilities for better traceability and readability."""
 
+import asyncio
 import json
 import logging
 from collections import Counter
-from typing import Any
+from datetime import datetime
+from typing import Any, Optional
 
 from homeassistant.util import ulid
 from langchain_core.messages import AIMessage, ToolMessage
+
+from .loki_handler import LokiHttpHandler, InfluxMetricsHandler
+
+# Global handler instances
+_loki_http_handler: Optional[LokiHttpHandler] = None
+_influx_metrics_handler: Optional[InfluxMetricsHandler] = None
 
 
 def create_run_id() -> str:
@@ -151,6 +159,89 @@ def format_messages_summary(
     return summary
 
 
+def initialize_loki_logging(config: dict) -> None:
+    """Initialize Loki and InfluxDB handlers based on configuration.
+
+    Args:
+        config: Configuration dictionary with Loki/InfluxDB settings
+    """
+    global _loki_http_handler, _influx_metrics_handler
+
+    _LOGGER = logging.getLogger(__name__)
+
+    # Initialize Loki handler if enabled
+    if config.get("loki_enabled", False) and config.get("loki_url"):
+        try:
+            _loki_http_handler = LokiHttpHandler(
+                loki_url=config["loki_url"],
+                buffer_path=config.get("loki_buffer_path", "/config/logs/generative_agent"),
+                timeout=config.get("loki_timeout", 5),
+                batch_size=config.get("loki_batch_size", 50),
+                batch_interval=config.get("loki_batch_interval", 10),
+            )
+
+            # Start the handler
+            loop = asyncio.get_event_loop()
+            loop.create_task(_loki_http_handler.start())
+
+            _LOGGER.info(
+                f"Loki logging initialized: {config['loki_url']} "
+                f"(batch={config.get('loki_batch_size', 50)}, "
+                f"interval={config.get('loki_batch_interval', 10)}s)"
+            )
+
+        except Exception as e:
+            _LOGGER.error(f"Failed to initialize Loki handler: {e}")
+            _loki_http_handler = None
+
+    # Initialize InfluxDB metrics handler if enabled
+    if config.get("influx_metrics_enabled", False) and config.get("influx_url"):
+        try:
+            _influx_metrics_handler = InfluxMetricsHandler(
+                url=config["influx_url"],
+                token=config["influx_token"],
+                org=config.get("influx_org", "smarthome"),
+                bucket=config.get("influx_bucket", "home_assistant"),
+                batch_size=config.get("influx_batch_size", 50),
+                batch_interval=config.get("influx_batch_interval", 10),
+            )
+
+            # Start the handler
+            loop = asyncio.get_event_loop()
+            loop.create_task(_influx_metrics_handler.start())
+
+            _LOGGER.info(
+                f"InfluxDB metrics initialized: {config['influx_url']} "
+                f"-> {config.get('influx_org')}/{config.get('influx_bucket')}"
+            )
+
+        except Exception as e:
+            _LOGGER.error(f"Failed to initialize InfluxDB handler: {e}")
+            _influx_metrics_handler = None
+
+
+async def shutdown_loki_logging() -> None:
+    """Shutdown Loki and InfluxDB handlers gracefully."""
+    global _loki_http_handler, _influx_metrics_handler
+
+    if _loki_http_handler:
+        await _loki_http_handler.stop()
+        _loki_http_handler = None
+
+    if _influx_metrics_handler:
+        await _influx_metrics_handler.stop()
+        _influx_metrics_handler = None
+
+
+def get_influx_handler() -> Optional[InfluxMetricsHandler]:
+    """Get the global InfluxDB metrics handler.
+
+    Returns:
+        InfluxMetricsHandler instance or None if not initialized
+    """
+    return _influx_metrics_handler
+
+
 def log_with_context(
     logger: logging.Logger,
     level: int,
@@ -195,3 +286,40 @@ def log_with_context(
 
     # Log with context
     logger.log(level, f"{prefix}{message}")
+
+    # Queue log to Loki via HTTP (batched)
+    if _loki_http_handler:
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": logging.getLevelName(level).lower(),
+            "message": message,
+            "conversation_id": conversation_id or "",
+            "run_id": run_id or "",
+            "node": node or "",
+            **extra_context
+        }
+
+        # Create labels for Loki
+        labels = {
+            "job": "home_generative_agent",
+            "level": logging.getLevelName(level).lower(),
+            "node": node or "unknown",
+            "conversation_id": conversation_id or "none",
+        }
+
+        # Add provider label if available
+        if "provider" in extra_context:
+            labels["provider"] = str(extra_context["provider"])
+
+        # Add tool_name label if available
+        if "tool_name" in extra_context:
+            labels["tool_name"] = str(extra_context["tool_name"])
+
+        # Non-blocking queue (batched push happens in background)
+        try:
+            # Use create_task to avoid blocking
+            loop = asyncio.get_event_loop()
+            loop.create_task(_loki_http_handler.queue_log(log_entry, labels))
+        except Exception:
+            # Silently fail - don't break normal logging
+            pass
