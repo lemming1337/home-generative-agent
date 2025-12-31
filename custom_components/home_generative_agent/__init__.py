@@ -850,9 +850,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
     if loki_config["loki_enabled"] and loki_config["loki_url"]:
         try:
             initialize_loki_logging(loki_config)
-            _LOGGER.info("Loki/InfluxDB integration initialized")
+            LOGGER.info("Loki/InfluxDB integration initialized")
         except Exception as e:
-            _LOGGER.error(f"Failed to initialize Loki/InfluxDB: {e}")
+            LOGGER.error(f"Failed to initialize Loki/InfluxDB: {e}")
 
     return True
 
@@ -863,9 +863,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool
     from .core.logging_utils import shutdown_loki_logging
     try:
         await shutdown_loki_logging()
-        _LOGGER.info("Loki/InfluxDB handlers shut down")
+        LOGGER.info("Loki/InfluxDB handlers shut down")
     except Exception as e:
-        _LOGGER.error(f"Error shutting down Loki/InfluxDB: {e}")
+        LOGGER.error(f"Error shutting down Loki/InfluxDB: {e}")
 
     await entry.runtime_data.pool.close()
     await entry.runtime_data.video_analyzer.stop()
