@@ -121,6 +121,7 @@ class ToolMetricsCollector:
 
         # Get InfluxDB handler reference
         from ..core.logging_utils import get_influx_handler
+
         self.influx_handler = get_influx_handler()
 
     def add_metric(self, metric: ToolCallMetrics) -> None:
@@ -133,7 +134,9 @@ class ToolMetricsCollector:
             try:
                 tags = {
                     "tool_name": metric.tool_name,
-                    "success": str(metric.success) if metric.success is not None else "unknown",
+                    "success": str(metric.success)
+                    if metric.success is not None
+                    else "unknown",
                 }
 
                 # Add error_type as tag if present

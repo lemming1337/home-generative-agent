@@ -238,6 +238,13 @@ async def _call_model(
     )
 
     # Log input messages summary
+    # Create full untruncated version for Loki
+    loki_full_messages = "\n".join(
+        [
+            f"[{i}] {type(m).__name__}: {str(getattr(m, 'content', ''))}"
+            for i, m in enumerate(trimmed_messages)
+        ]
+    )
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -245,9 +252,17 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
+        loki_message=f"Calling model with messages:\n{loki_full_messages}",
     )
 
     raw_response = await model.ainvoke(trimmed_messages)
+
+    # Get full content for Loki (no truncation)
+    raw_response_full = str(getattr(raw_response, "content", "") or "")
+    if hasattr(raw_response, "tool_calls") and raw_response.tool_calls:
+        raw_response_full += (
+            f" [tool_calls: {json.dumps(raw_response.tool_calls, ensure_ascii=False)}]"
+        )
 
     log_with_context(
         LOGGER,
@@ -256,6 +271,7 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
+        loki_message=f"Raw model response: {raw_response_full}",
     )
 
     response = extract_final(getattr(raw_response, "content", "") or "")
@@ -266,6 +282,13 @@ async def _call_model(
     else:
         ai_response = AIMessage(content=response)
 
+    # Get full AI response for Loki (no truncation)
+    ai_response_full = str(getattr(ai_response, "content", "") or "")
+    if hasattr(ai_response, "tool_calls") and ai_response.tool_calls:
+        ai_response_full += (
+            f" [tool_calls: {json.dumps(ai_response.tool_calls, ensure_ascii=False)}]"
+        )
+
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -273,6 +296,7 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
+        loki_message=f"AI response created: {ai_response_full}",
     )
 
     metadata: dict[str, str] = (
@@ -379,6 +403,13 @@ async def _summarize_and_remove_messages(
     type_summary = ", ".join(
         f"{count} {msg_type}" for msg_type, count in sorted(type_counts.items())
     )
+    # Create full untruncated version for Loki
+    loki_full_summary_msgs = "\n".join(
+        [
+            f"[{i}] {type(m).__name__}: {str(getattr(m, 'content', ''))}"
+            for i, m in enumerate(filtered_messages)
+        ]
+    )
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -389,6 +420,7 @@ async def _summarize_and_remove_messages(
         total_to_remove=total_to_remove,
         filtered_for_summary=len(filtered_messages),
         types=type_summary,
+        loki_message=f"Summarizing messages:\n{loki_full_summary_msgs}",
     )
 
     model = config["configurable"]["summarization_model"]
@@ -406,6 +438,7 @@ async def _summarize_and_remove_messages(
         run_id=run_id,
         node="summarize",
         messages_removed=total_to_remove,
+        loki_message=f"Summary created ({len(response)} chars): {response}",
     )
 
     return {
@@ -518,7 +551,7 @@ async def _call_tools(
                         response_size_bytes=response_size,
                     )
 
-                # Log tool response with truncation
+                # Log tool response with truncation for console, full for Loki
                 response_preview = str(tool_response)[:300]
                 if len(str(tool_response)) > 300:
                     response_preview += "..."
@@ -532,6 +565,7 @@ async def _call_tools(
                     tool_id=tool_id,
                     response_size=len(str(tool_response)),
                     response_preview=response_preview,
+                    loki_message=f"LangChain tool {tool_name} response (size={len(str(tool_response))}): {str(tool_response)}",
                 )
             except asyncio.TimeoutError:
                 error_type = ToolErrorType.TIMEOUT
@@ -610,15 +644,17 @@ async def _call_tools(
                         response_size_bytes=response_size,
                     )
 
-                # Log HA tool response with truncation
+                # Log HA tool response with truncation for console, full for Loki
                 # Parse JSON content for better readability
                 try:
                     parsed_content = json.loads(tool_response.content)
                     content_preview = json.dumps(parsed_content, ensure_ascii=False)[
                         :300
                     ]
+                    full_content = json.dumps(parsed_content, ensure_ascii=False)
                 except (json.JSONDecodeError, TypeError):
                     content_preview = str(tool_response.content)[:300]
+                    full_content = str(tool_response.content)
                 if len(str(tool_response.content)) > 300:
                     content_preview += "..."
 
@@ -632,6 +668,7 @@ async def _call_tools(
                     tool_id=tool_id,
                     response_size=len(str(tool_response.content)),
                     response_preview=content_preview,
+                    loki_message=f"HA tool {tool_name} response (size={len(str(tool_response.content))}): {full_content}",
                 )
             except asyncio.TimeoutError:
                 error_type = ToolErrorType.TIMEOUT

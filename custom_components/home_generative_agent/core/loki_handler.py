@@ -1,4 +1,5 @@
 """Loki and InfluxDB handlers for remote logging and metrics."""
+
 import asyncio
 import json
 import logging
@@ -80,7 +81,9 @@ class LokiFileBuffer:
                         try:
                             entries.append(json.loads(line))
                         except json.JSONDecodeError:
-                            _LOGGER.warning(f"Skipping invalid JSON in buffer: {line[:100]}")
+                            _LOGGER.warning(
+                                f"Skipping invalid JSON in buffer: {line[:100]}"
+                            )
 
             # Clear the file after successful read
             async with aiofiles.open(self.buffer_file, "w") as f:
@@ -173,7 +176,9 @@ class LokiHttpHandler:
 
         _LOGGER.info("Loki handler stopped")
 
-    async def queue_log(self, log_entry: Dict[str, Any], labels: Dict[str, str]) -> None:
+    async def queue_log(
+        self, log_entry: Dict[str, Any], labels: Dict[str, str]
+    ) -> None:
         """Queue a log entry for batched push.
 
         Args:
@@ -224,7 +229,9 @@ class LokiHttpHandler:
                         _LOGGER.debug(f"Successfully pushed {len(batch)} logs to Loki")
                     else:
                         error_text = await response.text()
-                        raise Exception(f"Loki returned {response.status}: {error_text}")
+                        raise Exception(
+                            f"Loki returned {response.status}: {error_text}"
+                        )
 
         except asyncio.TimeoutError:
             self.consecutive_failures += 1
@@ -284,7 +291,12 @@ class LokiHttpHandler:
         # Format into Loki payload
         payload = {
             "streams": [
-                {"stream": dict(label.strip("{}").split("=") for label in labels.split(",")), "values": values}
+                {
+                    "stream": dict(
+                        label.strip("{}").split("=") for label in labels.split(",")
+                    ),
+                    "values": values,
+                }
                 for labels, values in streams.items()
             ]
         }
@@ -392,12 +404,14 @@ class InfluxMetricsHandler:
             fields: Field key-value pairs
             tags: Tag key-value pairs
         """
-        self.queue.append({
-            "measurement": measurement,
-            "fields": fields,
-            "tags": tags,
-            "timestamp": int(time.time() * 1e9),  # nanoseconds
-        })
+        self.queue.append(
+            {
+                "measurement": measurement,
+                "fields": fields,
+                "tags": tags,
+                "timestamp": int(time.time() * 1e9),  # nanoseconds
+            }
+        )
 
     async def _batch_write_loop(self) -> None:
         """Background task that writes batches periodically."""
@@ -437,13 +451,19 @@ class InfluxMetricsHandler:
             }
 
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.post(url, data=line_protocol, headers=headers) as response:
+                async with session.post(
+                    url, data=line_protocol, headers=headers
+                ) as response:
                     if response.status == 204:
                         self.failed_writes = 0
-                        _LOGGER.debug(f"Successfully wrote {len(batch)} metrics to InfluxDB")
+                        _LOGGER.debug(
+                            f"Successfully wrote {len(batch)} metrics to InfluxDB"
+                        )
                     else:
                         error_text = await response.text()
-                        raise Exception(f"InfluxDB returned {response.status}: {error_text}")
+                        raise Exception(
+                            f"InfluxDB returned {response.status}: {error_text}"
+                        )
 
         except asyncio.TimeoutError:
             self.failed_writes += 1
@@ -452,7 +472,9 @@ class InfluxMetricsHandler:
 
         except aiohttp.ClientError as e:
             self.failed_writes += 1
-            _LOGGER.warning(f"InfluxDB write failed (attempt {self.failed_writes}): {e}")
+            _LOGGER.warning(
+                f"InfluxDB write failed (attempt {self.failed_writes}): {e}"
+            )
             await self._handle_failure(batch)
 
         except Exception as e:
@@ -478,7 +500,9 @@ class InfluxMetricsHandler:
             timestamp = metric.get("timestamp", int(time.time() * 1e9))
 
             # Format: measurement,tag1=value1,tag2=value2 field1=value1,field2=value2 timestamp
-            tag_str = ",".join(f"{k}={v}" for k, v in sorted(tags.items())) if tags else ""
+            tag_str = (
+                ",".join(f"{k}={v}" for k, v in sorted(tags.items())) if tags else ""
+            )
             field_str = ",".join(
                 f"{k}={v}" if isinstance(v, (int, float)) else f'{k}="{v}"'
                 for k, v in fields.items()
@@ -504,7 +528,9 @@ class InfluxMetricsHandler:
             # Too many failures, start discarding old metrics
             while len(self.queue) > 100:
                 self.queue.popleft()
-            _LOGGER.warning("InfluxDB failures exceeded threshold, discarding old metrics")
+            _LOGGER.warning(
+                "InfluxDB failures exceeded threshold, discarding old metrics"
+            )
         else:
             # Re-queue for retry
             for metric in batch:

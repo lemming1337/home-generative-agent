@@ -836,8 +836,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
         "loki_batch_size": entry.options.get("loki_batch_size", 50),
         "loki_batch_interval": entry.options.get("loki_batch_interval", 10),
         "loki_buffer_path": entry.options.get(
-            "loki_buffer_path",
-            f"{hass.config.config_dir}/logs/generative_agent"
+            "loki_buffer_path", f"{hass.config.config_dir}/logs/generative_agent"
         ),
         "influx_metrics_enabled": entry.options.get("influx_metrics_enabled", False),
         "influx_url": entry.options.get("influx_url", ""),
@@ -861,6 +860,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool
     """Unload the config entry."""
     # Shutdown Loki/InfluxDB handlers
     from .core.logging_utils import shutdown_loki_logging
+
     try:
         await shutdown_loki_logging()
         LOGGER.info("Loki/InfluxDB handlers shut down")

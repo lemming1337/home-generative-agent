@@ -174,7 +174,9 @@ def initialize_loki_logging(config: dict) -> None:
         try:
             _loki_http_handler = LokiHttpHandler(
                 loki_url=config["loki_url"],
-                buffer_path=config.get("loki_buffer_path", "/config/logs/generative_agent"),
+                buffer_path=config.get(
+                    "loki_buffer_path", "/config/logs/generative_agent"
+                ),
                 timeout=config.get("loki_timeout", 5),
                 batch_size=config.get("loki_batch_size", 50),
                 batch_interval=config.get("loki_batch_interval", 10),
@@ -249,6 +251,7 @@ def log_with_context(
     conversation_id: str | None = None,
     run_id: str | None = None,
     node: str | None = None,
+    loki_message: str | None = None,
     **extra_context: Any,
 ) -> None:
     """
@@ -257,10 +260,11 @@ def log_with_context(
     Args:
         logger: Logger instance to use
         level: Logging level (logging.DEBUG, logging.INFO, etc.)
-        message: Log message
+        message: Log message (may be truncated for console readability)
         conversation_id: Conversation/thread ID
         run_id: Run ID for this specific invocation
         node: Graph node name
+        loki_message: Optional full untruncated message for Loki (if None, uses message)
         **extra_context: Additional context to append to message
     """
     # Build context prefix
@@ -288,15 +292,16 @@ def log_with_context(
     logger.log(level, f"{prefix}{message}")
 
     # Queue log to Loki via HTTP (batched)
+    # Use full untruncated message for Loki if provided
     if _loki_http_handler:
         log_entry = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": logging.getLevelName(level).lower(),
-            "message": message,
+            "message": loki_message if loki_message is not None else message,
             "conversation_id": conversation_id or "",
             "run_id": run_id or "",
             "node": node or "",
-            **extra_context
+            **extra_context,
         }
 
         # Create labels for Loki

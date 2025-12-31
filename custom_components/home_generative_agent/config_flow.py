@@ -474,7 +474,9 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
     schema[
         vol.Optional(
             "influx_bucket",
-            description={"suggested_value": opts.get("influx_bucket", "home_assistant")},
+            description={
+                "suggested_value": opts.get("influx_bucket", "home_assistant")
+            },
             default="home_assistant",
         )
     ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
