@@ -40,9 +40,9 @@ from ..const import (  # noqa: TID252
     CONTEXT_MAX_MESSAGES,
     CONTEXT_MAX_TOKENS,
     EMBEDDING_MODEL_PROMPT_TEMPLATE,
-    SUMMARIZATION_INITIAL_PROMPT,
-    SUMMARIZATION_PROMPT_TEMPLATE,
-    SUMMARIZATION_SYSTEM_PROMPT,
+    RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
+    RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
+    RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
     TOOL_CALL_ERROR_TEMPLATE,
     TOOL_CALL_TIMEOUT_SECONDS,
 )
@@ -382,10 +382,21 @@ async def _summarize_and_remove_messages(
     total_to_remove = len(msgs_to_remove)
     type_counts = Counter(type(m).__name__ for m in msgs_to_remove)
 
+    # Get configurable prompts from config, with fallbacks to defaults
+    summarization_system_prompt = config["configurable"].get(
+        "summarization_system_prompt", RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT
+    )
+    summarization_initial_prompt = config["configurable"].get(
+        "summarization_initial_prompt", RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT
+    )
+    summarization_prompt_template = config["configurable"].get(
+        "summarization_prompt_template", RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE
+    )
+
     summary_message = (
-        SUMMARIZATION_PROMPT_TEMPLATE.format(summary=summary)
+        summarization_prompt_template.format(summary=summary)
         if summary
-        else SUMMARIZATION_INITIAL_PROMPT
+        else summarization_initial_prompt
     )
 
     # Build messages for the already-configured summarization model.
@@ -394,7 +405,7 @@ async def _summarize_and_remove_messages(
         m for m in msgs_to_remove if isinstance(m, (HumanMessage, AIMessage))
     ]
     messages = (
-        [SystemMessage(content=SUMMARIZATION_SYSTEM_PROMPT)]
+        [SystemMessage(content=summarization_system_prompt)]
         + filtered_messages
         + [HumanMessage(content=summary_message)]
     )

@@ -34,8 +34,14 @@ from .agent.tools import (
 from .agent.travel_times import get_travel_time
 from .const import (
     CONF_PROMPT,
+    CONF_SUMMARIZATION_INITIAL_PROMPT,
+    CONF_SUMMARIZATION_PROMPT_TEMPLATE,
+    CONF_SUMMARIZATION_SYSTEM_PROMPT,
     DOMAIN,
     LANGCHAIN_LOGGING_LEVEL,
+    RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
+    RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
+    RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
     TOOL_CALL_RATE_LIMIT_PER_MINUTE,
     TOOL_CALL_ERROR_SYSTEM_MESSAGE,
 )
@@ -305,6 +311,18 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 "options": options,
                 "vlm_model": runtime_data.vision_model,
                 "summarization_model": runtime_data.summarization_model,
+                "summarization_system_prompt": options.get(
+                    CONF_SUMMARIZATION_SYSTEM_PROMPT,
+                    RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
+                ),
+                "summarization_initial_prompt": options.get(
+                    CONF_SUMMARIZATION_INITIAL_PROMPT,
+                    RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
+                ),
+                "summarization_prompt_template": options.get(
+                    CONF_SUMMARIZATION_PROMPT_TEMPLATE,
+                    RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
+                ),
                 "langchain_tools": langchain_tools,
                 "ha_llm_api": llm_api or None,
                 "hass": hass,

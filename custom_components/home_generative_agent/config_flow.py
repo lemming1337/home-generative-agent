@@ -58,8 +58,11 @@ from .const import (
     CONF_PROMPT,
     CONF_RECOMMENDED,
     CONF_SEARXNG_URL,
+    CONF_SUMMARIZATION_INITIAL_PROMPT,
     CONF_SUMMARIZATION_MODEL_PROVIDER,
     CONF_SUMMARIZATION_MODEL_TEMPERATURE,
+    CONF_SUMMARIZATION_PROMPT_TEMPLATE,
+    CONF_SUMMARIZATION_SYSTEM_PROMPT,
     CONF_VIDEO_ANALYZER_MODE,
     CONF_VLM_PROVIDER,
     CONF_VLM_TEMPERATURE,
@@ -85,8 +88,11 @@ from .const import (
     RECOMMENDED_OPENAI_VLM,
     RECOMMENDED_BROWSERLESS_URL,
     RECOMMENDED_SEARXNG_URL,
+    RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
     RECOMMENDED_SUMMARIZATION_MODEL_PROVIDER,
     RECOMMENDED_SUMMARIZATION_MODEL_TEMPERATURE,
+    RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
+    RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
     RECOMMENDED_VIDEO_ANALYZER_MODE,
     RECOMMENDED_VLM_PROVIDER,
     RECOMMENDED_VLM_TEMPERATURE,
@@ -165,6 +171,9 @@ RECOMMENDED_OPTIONS = {
     CONF_VLM_TEMPERATURE: RECOMMENDED_VLM_TEMPERATURE,
     CONF_SUMMARIZATION_MODEL_PROVIDER: RECOMMENDED_SUMMARIZATION_MODEL_PROVIDER,
     CONF_SUMMARIZATION_MODEL_TEMPERATURE: RECOMMENDED_SUMMARIZATION_MODEL_TEMPERATURE,
+    CONF_SUMMARIZATION_SYSTEM_PROMPT: RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
+    CONF_SUMMARIZATION_INITIAL_PROMPT: RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
+    CONF_SUMMARIZATION_PROMPT_TEMPLATE: RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
     CONF_EMBEDDING_MODEL_PROVIDER: RECOMMENDED_EMBEDDING_MODEL_PROVIDER,
     CONF_ANTHROPIC_CHAT_MODEL: RECOMMENDED_ANTHROPIC_CHAT_MODEL,
     CONF_ANTHROPIC_VLM: RECOMMENDED_ANTHROPIC_VLM,
@@ -408,6 +417,35 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
                     default=spec.get("recommended_temperature", 1.0),
                 )
             ] = NumberSelector(NumberSelectorConfig(min=0, max=2, step=0.05))
+
+    # Summarization prompts (only shown when recommended is OFF)
+    schema[
+        vol.Optional(
+            CONF_SUMMARIZATION_SYSTEM_PROMPT,
+            description={"suggested_value": opts.get(CONF_SUMMARIZATION_SYSTEM_PROMPT)},
+            default=RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+
+    schema[
+        vol.Optional(
+            CONF_SUMMARIZATION_INITIAL_PROMPT,
+            description={
+                "suggested_value": opts.get(CONF_SUMMARIZATION_INITIAL_PROMPT)
+            },
+            default=RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+
+    schema[
+        vol.Optional(
+            CONF_SUMMARIZATION_PROMPT_TEMPLATE,
+            description={
+                "suggested_value": opts.get(CONF_SUMMARIZATION_PROMPT_TEMPLATE)
+            },
+            default=RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
+        )
+    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
 
     # Loki/InfluxDB logging configuration
     schema[

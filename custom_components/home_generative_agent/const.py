@@ -268,15 +268,26 @@ CONF_SUMMARIZATION_MODEL_TEMPERATURE = "summarization_model_temperature"
 RECOMMENDED_SUMMARIZATION_MODEL_TEMPERATURE = 0.2
 
 # Prompts for summarization (used in graph/tools flows)
-SUMMARIZATION_SYSTEM_PROMPT = "You are a bot that summarizes messages from a smart home AI. If you controlled entities the summary is just the work 'Erledigt'. Only list HASS entities if the user asked for data."
-SUMMARIZATION_INITIAL_PROMPT = "Create a summary of the smart home messages above:"
-SUMMARIZATION_PROMPT_TEMPLATE = """
+CONF_SUMMARIZATION_SYSTEM_PROMPT = "summarization_system_prompt"
+CONF_SUMMARIZATION_INITIAL_PROMPT = "summarization_initial_prompt"
+CONF_SUMMARIZATION_PROMPT_TEMPLATE = "summarization_prompt_template"
+
+RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT = "You are a bot that summarizes messages from a smart home AI. If you controlled entities the summary is just the work 'Erledigt'. Only list HASS entities if the user asked for data."
+RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT = (
+    "Create a summary of the smart home messages above:"
+)
+RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE = """
 This is the summary of the smart home messages so far: {summary}
 
 Update the summary by taking into account the additional smart home messages above.
 If you controlled entities the summary is just the work 'Erledigt'. Only list HASS entities if the user asked for data:
 
 """
+
+# Keep backward compatibility aliases
+SUMMARIZATION_SYSTEM_PROMPT = RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT
+SUMMARIZATION_INITIAL_PROMPT = RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT
+SUMMARIZATION_PROMPT_TEMPLATE = RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE
 
 # ---------------- Embeddings ----------------
 EMBEDDING_MODEL_OLLAMA_SUPPORTED = Literal["mxbai-embed-large"]
