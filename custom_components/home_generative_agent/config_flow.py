@@ -425,7 +425,7 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
             description={"suggested_value": opts.get(CONF_SUMMARIZATION_SYSTEM_PROMPT)},
             default=RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT,
         )
-    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+    ] = TemplateSelector()
 
     schema[
         vol.Optional(
@@ -435,7 +435,7 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
             },
             default=RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT,
         )
-    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+    ] = TemplateSelector()
 
     schema[
         vol.Optional(
@@ -445,7 +445,7 @@ def _schema_for(hass: HomeAssistant, opts: Mapping[str, Any]) -> VolDictType:
             },
             default=RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE,
         )
-    ] = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True))
+    ] = TemplateSelector()
 
     # Loki/InfluxDB logging configuration
     schema[
