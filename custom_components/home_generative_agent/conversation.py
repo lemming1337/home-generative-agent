@@ -20,6 +20,7 @@ from homeassistant.util import ulid
 from langchain_core.caches import InMemoryCache
 from langchain_core.globals import set_debug, set_llm_cache, set_verbose
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
+from langgraph.types import Command
 from voluptuous_openapi import convert
 
 from .agent.graph import workflow
@@ -355,16 +356,33 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             debug=LANGCHAIN_LOGGING_LEVEL == "debug",
         )
 
-        # Agent input: message history + current user request.
-        messages: list[AnyMessage] = []
-        messages.extend(message_history)
-        messages.append(HumanMessage(content=user_input.text))
-        app_input: State = {
-            "messages": messages,
-            "summary": "",
-            "chat_model_usage_metadata": {},
-            "messages_to_remove": [],
-        }
+        # Check if there's a pending interrupt from a previous invocation.
+        # If so, we need to resume with the user's response instead of adding
+        # it as a new message.
+        current_state = await app.aget_state(app_config)
+        has_pending_interrupt = current_state.tasks and any(
+            hasattr(task, "interrupts") and task.interrupts
+            for task in current_state.tasks
+        )
+
+        if has_pending_interrupt:
+            # Resume from interrupt with user's response
+            LOGGER.debug(
+                "Resuming from interrupt with user response: %s",
+                user_input.text[:100],
+            )
+            app_input = Command(resume=user_input.text)
+        else:
+            # Normal invocation: message history + current user request.
+            messages: list[AnyMessage] = []
+            messages.extend(message_history)
+            messages.append(HumanMessage(content=user_input.text))
+            app_input: State = {
+                "messages": messages,
+                "summary": "",
+                "chat_model_usage_metadata": {},
+                "messages_to_remove": [],
+            }
 
         # Interact with agent app.
         try:
@@ -386,6 +404,34 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
             trace.ConversationTraceEventType.AGENT_DETAIL,
             {"messages": response["messages"], "tools": tools if tools else None},
         )
+
+        # Check if the graph was interrupted (human-in-the-loop confirmation needed)
+        post_state = await app.aget_state(app_config)
+        if post_state.tasks:
+            for task in post_state.tasks:
+                if hasattr(task, "interrupts") and task.interrupts:
+                    # Graph is paused waiting for user input
+                    interrupt_value = task.interrupts[0].value
+                    LOGGER.info(
+                        "Graph interrupted, waiting for user response: %s",
+                        str(interrupt_value)[:200],
+                    )
+                    # Return the interrupt message to the user
+                    intent_response = intent.IntentResponse(
+                        language=user_input.language
+                    )
+                    intent_response.async_set_speech(str(interrupt_value))
+                    chat_log.async_add_assistant_content_without_tools(
+                        conversation.AssistantContent(
+                            agent_id=self.entry.entry_id,
+                            content=str(interrupt_value),
+                        )
+                    )
+                    return conversation.ConversationResult(
+                        response=intent_response,
+                        conversation_id=chat_log.conversation_id,
+                        continue_conversation=True,  # Keep conversation open for response
+                    )
 
         LOGGER.debug("====== End of run ======")
 

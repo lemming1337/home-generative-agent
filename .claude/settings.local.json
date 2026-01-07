@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(bash scripts/lint:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebFetch(domain:langchain-ai.github.io)",
+      "WebFetch(domain:docs.langchain.com)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:dev.to)"
     ],
     "deny": [],
     "ask": []
