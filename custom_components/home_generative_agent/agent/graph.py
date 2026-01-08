@@ -791,6 +791,29 @@ async def _confirm_automation(
         # No automation being created, proceed normally
         return Command(goto="action")
 
+    # Check if these automation calls have already been executed by looking for
+    # their ToolMessage results in the message history. This prevents asking for
+    # confirmation twice for the same automation.
+    automation_call_ids = {tc.get("id") for tc in automation_calls if tc.get("id")}
+    executed_tool_ids = {
+        m.tool_call_id
+        for m in messages
+        if isinstance(m, ToolMessage) and m.tool_call_id
+    }
+
+    # If all automation calls have already been executed, skip confirmation
+    if automation_call_ids and automation_call_ids.issubset(executed_tool_ids):
+        log_with_context(
+            LOGGER,
+            logging.DEBUG,
+            "Automation tool calls already executed, skipping confirmation",
+            conversation_id=conversation_id,
+            run_id=run_id,
+            node="confirm_automation",
+            executed_ids=list(automation_call_ids),
+        )
+        return Command(goto="action")
+
     # Extract automation details for display
     automation_call = automation_calls[0]
     args = automation_call.get("args", {})

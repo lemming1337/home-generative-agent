@@ -34,6 +34,7 @@ from langgraph.store.postgres.base import PostgresIndexConfig
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
+from .agent.ha_docs_manager import check_docs_populated, populate_ha_docs
 from .agent.tools import analyze_image
 from .const import (
     CHAT_MODEL_MAX_TOKENS,
@@ -502,6 +503,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: HGAConfigEntry) -> bool:
     checkpointer = AsyncPostgresSaver(pool)
     # First-time setup (if needed)
     await _bootstrap_db_once(hass, entry, store, checkpointer)
+
+    # Populate Home Assistant automation documentation for RAG (if not already done)
+    try:
+        if not await check_docs_populated(store):
+            docs_count = await populate_ha_docs(store)
+            LOGGER.info("Populated %d Home Assistant documentation chunks", docs_count)
+        else:
+            LOGGER.debug("Home Assistant documentation already populated")
+    except Exception:
+        LOGGER.warning(
+            "Failed to populate HA documentation, automation help may be limited"
+        )
 
     # Migrate person gallery DB schema (if needed)
     try:
