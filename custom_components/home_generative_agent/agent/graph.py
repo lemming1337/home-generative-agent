@@ -113,6 +113,18 @@ class State(MessagesState):
 # ----- Utilities -----
 
 
+def _log_ctx(config: RunnableConfig) -> tuple[str, str]:
+    """Extract (conversation_id, run_id) for logging."""
+    cfg = config.get("configurable", {})
+    return cfg.get("thread_id", "unknown"), cfg.get("run_id", "unknown")
+
+
+def _truncate(text: str, max_len: int = 300) -> str:
+    """Truncate text with ellipsis if over max_len."""
+    s = str(text)
+    return s[:max_len] + "..." if len(s) > max_len else s
+
+
 async def _retrieve_camera_activity(
     hass: HomeAssistant, store: BaseStore
 ) -> list[dict[str, dict[str, str]]]:
@@ -162,8 +174,7 @@ async def _call_model(
         raise HomeAssistantError(msg)
 
     # Extract context for logging
-    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
-    run_id = config.get("configurable", {}).get("run_id", "unknown")
+    conversation_id, run_id = _log_ctx(config)
     user_id = config["configurable"]["user_id"]
 
     model = config["configurable"]["chat_model"]
@@ -361,8 +372,7 @@ async def _summarize_and_remove_messages(
         raise HomeAssistantError(msg)
 
     # Extract context for logging
-    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
-    run_id = config.get("configurable", {}).get("run_id", "unknown")
+    conversation_id, run_id = _log_ctx(config)
 
     summary = state.get("summary", "")
     msgs_to_remove = state.get("messages_to_remove", [])
@@ -440,7 +450,7 @@ async def _summarize_and_remove_messages(
     response = extract_final(getattr(raw_response, "content", "") or "")
 
     # Log summary result
-    summary_preview = response[:200] + "..." if len(response) > 200 else response
+    summary_preview = _truncate(response, 200)
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -472,8 +482,7 @@ async def _call_tools(
         raise HomeAssistantError(msg)
 
     # Extract context for logging
-    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
-    run_id = config.get("configurable", {}).get("run_id", "unknown")
+    conversation_id, run_id = _log_ctx(config)
 
     langchain_tools = config["configurable"]["langchain_tools"]
     ha_llm_api = config["configurable"]["ha_llm_api"]
@@ -495,9 +504,7 @@ async def _call_tools(
         tool_id = tool_call.get("id") or ""
 
         # Log tool call with structured args
-        args_summary = json.dumps(tool_args, ensure_ascii=False)[:200]
-        if len(json.dumps(tool_args)) > 200:
-            args_summary += "..."
+        args_summary = _truncate(json.dumps(tool_args, ensure_ascii=False), 200)
         log_with_context(
             LOGGER,
             logging.DEBUG,
@@ -533,7 +540,7 @@ async def _call_tools(
                 tool_name=name,
                 tool_id=tid,
                 error_type=error_type.value,
-                error=error_msg[:200],
+                error=_truncate(error_msg, 200),
             )
             message = TOOL_CALL_ERROR_TEMPLATE.format(error=error_msg)
             return ToolMessage(
@@ -563,9 +570,7 @@ async def _call_tools(
                     )
 
                 # Log tool response with truncation for console, full for Loki
-                response_preview = str(tool_response)[:300]
-                if len(str(tool_response)) > 300:
-                    response_preview += "..."
+                response_preview = _truncate(tool_response)
                 log_with_context(
                     LOGGER,
                     logging.DEBUG,
@@ -625,7 +630,7 @@ async def _call_tools(
                     run_id=run_id,
                     node="action",
                     tool_id=tool_id,
-                    error=str(err)[:200],
+                    error=_truncate(err, 200),
                     exc_info=True,
                 )
                 tool_response = _handle_tool_error(
@@ -659,15 +664,10 @@ async def _call_tools(
                 # Parse JSON content for better readability
                 try:
                     parsed_content = json.loads(tool_response.content)
-                    content_preview = json.dumps(parsed_content, ensure_ascii=False)[
-                        :300
-                    ]
                     full_content = json.dumps(parsed_content, ensure_ascii=False)
                 except (json.JSONDecodeError, TypeError):
-                    content_preview = str(tool_response.content)[:300]
                     full_content = str(tool_response.content)
-                if len(str(tool_response.content)) > 300:
-                    content_preview += "..."
+                content_preview = _truncate(full_content)
 
                 log_with_context(
                     LOGGER,
@@ -728,7 +728,7 @@ async def _call_tools(
                     run_id=run_id,
                     node="action",
                     tool_id=tool_id,
-                    error=str(err)[:200],
+                    error=_truncate(err, 200),
                     exc_info=True,
                 )
                 tool_response = _handle_tool_error(
@@ -774,8 +774,7 @@ async def _confirm_automation(
         raise HomeAssistantError(msg)
 
     # Extract context for logging
-    conversation_id = config.get("configurable", {}).get("thread_id", "unknown")
-    run_id = config.get("configurable", {}).get("run_id", "unknown")
+    conversation_id, run_id = _log_ctx(config)
 
     messages = state["messages"]
     if not isinstance(messages[-1], AIMessage):

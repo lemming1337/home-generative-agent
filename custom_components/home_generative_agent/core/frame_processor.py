@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -16,6 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from ..agent.tools import analyze_image  # noqa: TID252
 from .datetime_utils import DateTimeUtils
+from .video_helpers import dedupe_desc
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -196,7 +196,7 @@ class FrameProcessor:
             prev_text = frame_desc
 
         # Deduplicate near-identical descriptions
-        frame_descriptions = self._deduplicate_descriptions(frame_descriptions)
+        frame_descriptions = dedupe_desc(frame_descriptions)
 
         # Cap to last 8 frames
         frame_descriptions = frame_descriptions[-8:]
@@ -213,33 +213,3 @@ class FrameProcessor:
         )
 
         return frame_descriptions, recognized
-
-    @staticmethod
-    def _deduplicate_descriptions(
-        descs: list[dict[str, list[str]]],
-    ) -> list[dict[str, list[str]]]:
-        """
-        Collapse near-duplicate frame texts to reduce prompt size.
-
-        Args:
-            descs: List of {description: people} dicts
-
-        Returns:
-            Deduplicated list
-
-        """
-        out: list[dict[str, list[str]]] = []
-        last_norm: str | None = None
-
-        for d in descs:
-            # Get description text (single key in dict)
-            text = next(iter(d.keys()))
-
-            # Normalize for comparison
-            norm = re.sub(r"\s+", " ", text.lower()).strip()
-
-            if norm != last_norm:
-                out.append(d)
-                last_norm = norm
-
-        return out

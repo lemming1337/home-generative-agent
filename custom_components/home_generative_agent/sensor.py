@@ -7,14 +7,10 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 
 from .core.recognized_sensor import RecognizedPeopleSensor
+from .core.utils import setup_camera_platform
 
 if TYPE_CHECKING:
-    from homeassistant.core import Event, HomeAssistant
-
-
-def _discover_cameras(hass: HomeAssistant) -> list[str]:
-    """Return all current camera entity_ids."""
-    return [s.entity_id for s in hass.states.async_all("camera")]
+    from homeassistant.core import HomeAssistant
 
 
 async def async_setup_entry(
@@ -22,21 +18,7 @@ async def async_setup_entry(
     entry: Any,  # noqa: ARG001
     async_add_entities: Any,
 ) -> None:
-    """
-    Set up one recognized-people sensor per camera.
-
-    If no cameras exist yet, wait for Home Assistant to finish starting,
-    then try discovery again.
-    """
-    cams = _discover_cameras(hass)
-    if cams:
-        async_add_entities([RecognizedPeopleSensor(hass, cam) for cam in cams])
-        return
-
-    async def _on_started(_: Event) -> None:
-        new_cams = _discover_cameras(hass)
-        if not new_cams:
-            return
-        async_add_entities([RecognizedPeopleSensor(hass, cam) for cam in new_cams])
-
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
+    """Set up one recognized-people sensor per camera."""
+    on_started = setup_camera_platform(hass, async_add_entities, RecognizedPeopleSensor)
+    if on_started:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, on_started)

@@ -118,7 +118,72 @@ class LokiFileBuffer:
             _LOGGER.error(f"Failed to rotate buffer: {e}")
 
 
-class LokiHttpHandler:
+class _BatchHandler:
+    """Base class for batched async push/write handlers."""
+
+    def __init__(self, batch_size: int, batch_interval: int):
+        """Initialize shared batch handler fields.
+
+        Args:
+            batch_size: Number of items to batch before flush
+            batch_interval: Seconds to wait before flushing partial batch
+        """
+        self.batch_size = batch_size
+        self.batch_interval = batch_interval
+        self.queue: deque = deque()
+        self.batch_task: Optional[asyncio.Task] = None
+        self.running = False
+        self.consecutive_failures = 0
+
+    async def start(self) -> None:
+        """Start the background batch loop task."""
+        if not self.running:
+            self.running = True
+            self.batch_task = asyncio.create_task(self._batch_loop())
+
+    async def stop(self) -> None:
+        """Stop the background task and flush remaining items."""
+        self.running = False
+        if self.batch_task:
+            self.batch_task.cancel()
+            try:
+                await self.batch_task
+            except asyncio.CancelledError:
+                pass
+
+        # Flush remaining items
+        if self.queue:
+            await self._flush(list(self.queue))
+
+    async def _batch_loop(self) -> None:
+        """Background task that flushes batches periodically."""
+        while self.running:
+            try:
+                await asyncio.sleep(self.batch_interval)
+
+                if self.queue:
+                    batch = []
+                    while self.queue and len(batch) < self.batch_size:
+                        batch.append(self.queue.popleft())
+
+                    if batch:
+                        await self._flush(batch)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _LOGGER.error(f"Error in batch loop: {e}")
+
+    async def _flush(self, batch: List[Dict[str, Any]]) -> None:
+        """Flush a batch of items. Must be overridden by subclasses.
+
+        Args:
+            batch: List of items to flush
+        """
+        raise NotImplementedError
+
+
+class LokiHttpHandler(_BatchHandler):
     """Async HTTP handler for pushing logs to Loki."""
 
     def __init__(
@@ -138,23 +203,16 @@ class LokiHttpHandler:
             batch_size: Number of logs to batch before push
             batch_interval: Seconds to wait before pushing partial batch
         """
+        super().__init__(batch_size, batch_interval)
         self.loki_url = loki_url.rstrip("/")
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        self.batch_size = batch_size
-        self.batch_interval = batch_interval
-
-        self.queue: deque = deque()
         self.buffer = LokiFileBuffer(buffer_path)
-        self.batch_task: Optional[asyncio.Task] = None
-        self.running = False
         self.last_push_time = time.time()
-        self.consecutive_failures = 0
 
     async def start(self) -> None:
         """Start the background batch push task."""
-        if not self.running:
-            self.running = True
-            self.batch_task = asyncio.create_task(self._batch_push_loop())
+        await super().start()
+        if self.running:
             _LOGGER.info("Loki handler started")
 
             # Try to send any buffered logs
@@ -162,18 +220,7 @@ class LokiHttpHandler:
 
     async def stop(self) -> None:
         """Stop the background task and flush remaining logs."""
-        self.running = False
-        if self.batch_task:
-            self.batch_task.cancel()
-            try:
-                await self.batch_task
-            except asyncio.CancelledError:
-                pass
-
-        # Flush remaining logs
-        if self.queue:
-            await self._push_batch(list(self.queue))
-
+        await super().stop()
         _LOGGER.info("Loki handler stopped")
 
     async def queue_log(
@@ -187,26 +234,7 @@ class LokiHttpHandler:
         """
         self.queue.append({"entry": log_entry, "labels": labels})
 
-    async def _batch_push_loop(self) -> None:
-        """Background task that pushes batches periodically."""
-        while self.running:
-            try:
-                await asyncio.sleep(self.batch_interval)
-
-                if self.queue:
-                    batch = []
-                    while self.queue and len(batch) < self.batch_size:
-                        batch.append(self.queue.popleft())
-
-                    if batch:
-                        await self._push_batch(batch)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                _LOGGER.error(f"Error in batch push loop: {e}")
-
-    async def _push_batch(self, batch: List[Dict[str, Any]]) -> None:
+    async def _flush(self, batch: List[Dict[str, Any]]) -> None:
         """Push a batch of logs to Loki.
 
         Args:
@@ -336,7 +364,7 @@ class LokiHttpHandler:
             _LOGGER.error(f"Failed to retry buffered logs: {e}")
 
 
-class InfluxMetricsHandler:
+class InfluxMetricsHandler(_BatchHandler):
     """Async handler for pushing metrics to InfluxDB."""
 
     def __init__(
@@ -358,40 +386,23 @@ class InfluxMetricsHandler:
             batch_size: Number of metrics to batch
             batch_interval: Seconds between batch writes
         """
+        super().__init__(batch_size, batch_interval)
         self.url = url.rstrip("/")
         self.token = token
         self.org = org
         self.bucket = bucket
-        self.batch_size = batch_size
-        self.batch_interval = batch_interval
-
-        self.queue: deque = deque()
-        self.batch_task: Optional[asyncio.Task] = None
-        self.running = False
         self.failed_writes = 0
         self.timeout = aiohttp.ClientTimeout(total=5)
 
     async def start(self) -> None:
         """Start the background batch write task."""
-        if not self.running:
-            self.running = True
-            self.batch_task = asyncio.create_task(self._batch_write_loop())
+        await super().start()
+        if self.running:
             _LOGGER.info("InfluxDB handler started")
 
     async def stop(self) -> None:
         """Stop the background task and flush remaining metrics."""
-        self.running = False
-        if self.batch_task:
-            self.batch_task.cancel()
-            try:
-                await self.batch_task
-            except asyncio.CancelledError:
-                pass
-
-        # Flush remaining metrics
-        if self.queue:
-            await self._write_batch(list(self.queue))
-
+        await super().stop()
         _LOGGER.info("InfluxDB handler stopped")
 
     async def queue_metric(
@@ -413,26 +424,7 @@ class InfluxMetricsHandler:
             }
         )
 
-    async def _batch_write_loop(self) -> None:
-        """Background task that writes batches periodically."""
-        while self.running:
-            try:
-                await asyncio.sleep(self.batch_interval)
-
-                if self.queue:
-                    batch = []
-                    while self.queue and len(batch) < self.batch_size:
-                        batch.append(self.queue.popleft())
-
-                    if batch:
-                        await self._write_batch(batch)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                _LOGGER.error(f"Error in InfluxDB batch write loop: {e}")
-
-    async def _write_batch(self, batch: List[Dict[str, Any]]) -> None:
+    async def _flush(self, batch: List[Dict[str, Any]]) -> None:
         """Write a batch of metrics to InfluxDB.
 
         Args:

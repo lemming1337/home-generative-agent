@@ -27,7 +27,7 @@ from ..const import (  # noqa: TID252
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Sequence
 
     from homeassistant.core import HomeAssistant
     from langchain_ollama import OllamaEmbeddings
@@ -119,24 +119,56 @@ def default_mobile_notify_service(hass: HomeAssistant) -> str | None:
     return services[0] if services else None
 
 
+def setup_camera_platform(
+    hass: HomeAssistant,
+    async_add_entities: Any,
+    entity_cls: type,
+) -> Any | None:
+    """Set up one entity per camera.
+
+    Returns an ``_on_started`` callback if cameras are not yet available,
+    or ``None`` if entities were added immediately.
+    """
+    from homeassistant.core import Event  # noqa: PLC0415
+
+    cams = [s.entity_id for s in hass.states.async_all("camera")]
+    if cams:
+        async_add_entities([entity_cls(hass, cam) for cam in cams])
+        return None
+
+    async def _on_started(_: Event) -> None:
+        new_cams = [s.entity_id for s in hass.states.async_all("camera")]
+        if new_cams:
+            async_add_entities([entity_cls(hass, cam) for cam in new_cams])
+
+    return _on_started
+
+
 # ---------------------------
 # Health checks
 # ---------------------------
+
+
+async def _provider_healthy(
+    label: str,
+    validate_coro: Awaitable[None],
+) -> bool:
+    """Run *validate_coro* and return True on success, False on failure."""
+    try:
+        await validate_coro
+    except (CannotConnectError, InvalidAuthError) as err:
+        LOGGER.warning("%s health check failed: %s", label, err)
+        return False
+    return True
 
 
 async def ollama_healthy(
     hass: HomeAssistant, base_url: str, timeout_s: float = 2.0
 ) -> bool:
     """Return True if Ollama is reachable, False otherwise."""
-    try:
-        await validate_ollama_url(hass, base_url, timeout_s)
-    except CannotConnectError as err:
-        LOGGER.warning(
-            "Ollama health check failed (%s): %s", ensure_http_url(base_url), err
-        )
-        return False
-    else:
-        return True
+    return await _provider_healthy(
+        "Ollama", validate_ollama_url(hass, base_url, timeout_s)
+    )
 
 
 async def openai_healthy(
@@ -146,13 +178,9 @@ async def openai_healthy(
     timeout_s: float = 2.0,
 ) -> bool:
     """Return True if OpenAI API is reachable, False otherwise."""
-    try:
-        await validate_openai_key(hass, api_key, base_url, timeout_s)
-    except (CannotConnectError, InvalidAuthError) as err:
-        LOGGER.warning("OpenAI health check failed: %s", err)
-        return False
-    else:
-        return True
+    return await _provider_healthy(
+        "OpenAI", validate_openai_key(hass, api_key, base_url, timeout_s)
+    )
 
 
 async def gemini_healthy(
@@ -162,13 +190,9 @@ async def gemini_healthy(
     if not api_key:
         LOGGER.warning("Gemini health check skipped: missing API key.")
         return False
-    try:
-        await validate_gemini_key(hass, api_key, timeout_s)
-    except (CannotConnectError, InvalidAuthError) as err:
-        LOGGER.warning("Gemini health check failed: %s", err)
-        return False
-    else:
-        return True
+    return await _provider_healthy(
+        "Gemini", validate_gemini_key(hass, api_key, timeout_s)
+    )
 
 
 async def anthropic_healthy(
@@ -178,18 +202,43 @@ async def anthropic_healthy(
     if not api_key:
         LOGGER.warning("Anthropic health check skipped: missing API key.")
         return False
-    try:
-        await validate_anthropic_key(hass, api_key, timeout_s)
-    except (CannotConnectError, InvalidAuthError) as err:
-        LOGGER.warning("Anthropic health check failed: %s", err)
-        return False
-    else:
-        return True
+    return await _provider_healthy(
+        "Anthropic", validate_anthropic_key(hass, api_key, timeout_s)
+    )
 
 
 # ---------------------------
 # Validators
 # ---------------------------
+
+
+async def _validate_http_endpoint(
+    hass: HomeAssistant,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_s: float = 10.0,
+    check_auth: bool = True,
+    label: str = "",
+) -> None:
+    """Shared HTTP-endpoint validation logic.
+
+    Raises:
+        CannotConnectError: on timeout, network error, or >= 400 status.
+        InvalidAuthError:   on 401 (only when *check_auth* is True).
+    """
+    client = get_async_client(hass)
+    try:
+        async with async_timeout.timeout(timeout_s):
+            resp = await client.get(url, headers=headers or {})
+    except (TimeoutError, httpx.RequestError) as err:
+        LOGGER.debug("%s connectivity exception: %s", label or url, err)
+        raise CannotConnectError from err
+
+    if check_auth and resp.status_code == HTTP_STATUS_UNAUTHORIZED:
+        raise InvalidAuthError
+    if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
+        raise CannotConnectError
 
 
 async def validate_ollama_url(
@@ -198,17 +247,13 @@ async def validate_ollama_url(
     """Validate that the Ollama endpoint is reachable."""
     if not base_url:
         return
-    base_url = ensure_http_url(base_url)
-    client = get_async_client(hass)
-    try:
-        async with async_timeout.timeout(timeout_s):
-            resp = await client.get(urljoin(base_url.rstrip("/") + "/", "api/tags"))
-    except (TimeoutError, httpx.RequestError) as err:
-        LOGGER.debug("Ollama connectivity exception: %s", err)
-        raise CannotConnectError from err
-    else:
-        if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
-            raise CannotConnectError
+    await _validate_http_endpoint(
+        hass,
+        urljoin(ensure_http_url(base_url).rstrip("/") + "/", "api/tags"),
+        timeout_s=timeout_s,
+        check_auth=False,
+        label="Ollama",
+    )
 
 
 async def validate_openai_key(
@@ -218,26 +263,15 @@ async def validate_openai_key(
     timeout_s: float = 10.0,
 ) -> None:
     """Validate that an OpenAI API key is authorized and reachable."""
-
-    # Use custom base_url if provided, otherwise use default
-    url = base_url
-    url = ensure_http_url(url)
+    url = ensure_http_url(base_url)
     models_endpoint = urljoin(url.rstrip("/") + "/", "models")
-    client = get_async_client(hass)
-    try:
-        async with async_timeout.timeout(timeout_s):
-            resp = await client.get(
-                models_endpoint,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-    except (TimeoutError, httpx.RequestError) as err:
-        LOGGER.debug("OpenAI connectivity exception: %s", err)
-        raise CannotConnectError from err
-    else:
-        if resp.status_code == HTTP_STATUS_UNAUTHORIZED:
-            raise InvalidAuthError
-        if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
-            raise CannotConnectError
+    await _validate_http_endpoint(
+        hass,
+        models_endpoint,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout_s=timeout_s,
+        label="OpenAI",
+    )
 
 
 async def validate_gemini_key(
@@ -246,20 +280,12 @@ async def validate_gemini_key(
     """Validate that a Gemini API key is authorized and reachable."""
     if not api_key:
         return
-    client = get_async_client(hass)
-    try:
-        async with async_timeout.timeout(timeout_s):
-            resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
-            )
-    except (TimeoutError, httpx.RequestError) as err:
-        LOGGER.debug("Gemini connectivity exception: %s", err)
-        raise CannotConnectError from err
-    else:
-        if resp.status_code == HTTP_STATUS_UNAUTHORIZED:
-            raise InvalidAuthError
-        if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
-            raise CannotConnectError
+    await _validate_http_endpoint(
+        hass,
+        f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+        timeout_s=timeout_s,
+        label="Gemini",
+    )
 
 
 async def validate_anthropic_key(
@@ -268,21 +294,13 @@ async def validate_anthropic_key(
     """Validate that an Anthropic API key is authorized and reachable."""
     if not api_key:
         return
-    client = get_async_client(hass)
-    try:
-        async with async_timeout.timeout(timeout_s):
-            resp = await client.get(
-                "https://api.anthropic.com/v1/models",
-                headers={"x-api-key": api_key},
-            )
-    except (TimeoutError, httpx.RequestError) as err:
-        LOGGER.debug("Anthropic connectivity exception: %s", err)
-        raise CannotConnectError from err
-    else:
-        if resp.status_code == HTTP_STATUS_UNAUTHORIZED:
-            raise InvalidAuthError
-        if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
-            raise CannotConnectError
+    await _validate_http_endpoint(
+        hass,
+        "https://api.anthropic.com/v1/models",
+        headers={"x-api-key": api_key},
+        timeout_s=timeout_s,
+        label="Anthropic",
+    )
 
 
 async def validate_face_api_url(
@@ -291,17 +309,13 @@ async def validate_face_api_url(
     """Validate that the face-recognition API endpoint is reachable."""
     if not base_url:
         return
-    base_url = ensure_http_url(base_url)
-    client = get_async_client(hass)
-    try:
-        async with async_timeout.timeout(timeout_s):
-            resp = await client.get(urljoin(base_url.rstrip("/") + "/", "status"))
-    except (TimeoutError, httpx.RequestError) as err:
-        LOGGER.debug("Face API connectivity exception: %s", err)
-        raise CannotConnectError from err
-    else:
-        if resp.status_code >= HTTP_STATUS_BAD_REQUEST:
-            raise CannotConnectError
+    await _validate_http_endpoint(
+        hass,
+        urljoin(ensure_http_url(base_url).rstrip("/") + "/", "status"),
+        timeout_s=timeout_s,
+        check_auth=False,
+        label="Face API",
+    )
 
 
 async def validate_db_uri(hass: HomeAssistant, db_uri: str) -> None:

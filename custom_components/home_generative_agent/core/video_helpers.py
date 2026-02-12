@@ -7,18 +7,18 @@ import contextlib
 import io
 import logging
 import re
-from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Final
 
-from homeassistant.util import dt as dt_util
 from PIL import Image
 
 from ..const import (  # noqa: TID252
     VIDEO_ANALYZER_LATEST_NAME,
     VIDEO_ANALYZER_LATEST_SUBFOLDER,
 )
+from .datetime_utils import DateTimeUtils
+from .image_utils import ImageUtils
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -115,47 +115,17 @@ def dedupe_desc(descs: list[dict[str, list[str]]]) -> list[dict[str, list[str]]]
 
 def hamming64(a: int, b: int) -> int:
     """Hamming distance for up to 64-bit integers."""
-    x = (a ^ b) & ((1 << 64) - 1)
-    # builtin bit_count is fast in Py3.8+
-    return x.bit_count()
+    return ImageUtils.hamming_distance(a, b)
 
 
 def dhash_bytes(buf: bytes, size: int = _UNIQUENESS_HASH_SIZE) -> int:
-    """
-    Compute 64-bit (size=8) or larger dHash from JPEG/PNG bytes using PIL only.
-
-    dHash compares adjacent pixels horizontally.
-    """
-    with Image.open(io.BytesIO(buf)) as img:
-        im = img.convert("L")  # grayscale
-        # Resize to (size+1, size) to have adjacent pairs horizontally
-        im = im.resize((size + 1, size), Image.Resampling.LANCZOS)
-        pixels = im.getdata()
-        # Build bitstring by comparing horizontally
-        bits = 0
-        bitpos = 0
-        width = size + 1
-        for y in range(size):
-            row_off = y * width
-            for x in range(size):
-                left = pixels[row_off + x]
-                right = pixels[row_off + x + 1]
-                if left > right:  # set bit if left > right
-                    bits |= 1 << bitpos
-                bitpos += 1
-        return bits  # up to size*size bits; with size=8 it's 64-bit
+    """Compute dHash from JPEG/PNG bytes."""
+    return ImageUtils.compute_dhash(buf, size)
 
 
 def epoch_from_path(path: Path) -> int:
     """Extract epoch seconds from snapshot filename."""
-    s = path.stem.removeprefix("snapshot_")  # "YYYYMMDD_HHMMSS"
-    y, mo, d = int(s[0:4]), int(s[4:6]), int(s[6:8])
-    hh, mm, ss = int(s[9:11]), int(s[11:13]), int(s[13:15])
-
-    # Filename was created with dt_util.as_local(...), so attach local tz
-    dt_local = datetime(y, mo, d, hh, mm, ss, tzinfo=dt_util.DEFAULT_TIME_ZONE)
-    # Return UTC epoch seconds
-    return int(dt_util.as_timestamp(dt_local))
+    return DateTimeUtils.epoch_from_snapshot_path(path.name)
 
 
 def order_batch(batch: list[Path]) -> list[tuple[Path, int]]:

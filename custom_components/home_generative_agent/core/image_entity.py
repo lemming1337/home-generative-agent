@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
@@ -21,7 +21,7 @@ from custom_components.home_generative_agent.const import (
 from custom_components.home_generative_agent.core.video_helpers import latest_target
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,12 +45,25 @@ MIME_JPEG: Final = "image/jpeg"
 UNIQUE_PREFIX: Final = "last_event::"
 NAME_SUFFIX: Final = " Last Event"
 
-# Positional index constants
-IDX_CAMERA_ID: Final = 0
-IDX_LATEST_PATH: Final = 1
-IDX_SUMMARY: Final = 2
-IDX_PEOPLE: Final = 3
-IDX_LAST_EVENT_ISO: Final = 4
+
+class NewLatestArgs(NamedTuple):
+    """Positional args for SIGNAL_HGA_NEW_LATEST."""
+
+    camera_id: str
+    latest_path: str | None = None
+    summary: str | None = None
+    people: list[str] | None = None
+    last_event_iso: str | None = None
+
+
+class RecognizedArgs(NamedTuple):
+    """Positional args for SIGNAL_HGA_RECOGNIZED."""
+
+    camera_id: str
+    people: list[str] | None = None
+    summary: str | None = None
+    last_event_iso: str | None = None
+    latest_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -149,33 +162,14 @@ class LastEventImage(ImageEntity):
     @callback
     def _on_new_latest(self, *args: Any) -> None:
         """Handle SIGNAL_HGA_NEW_LATEST."""
-        if not args or cast("str", args[IDX_CAMERA_ID]) != self._camera_id:
+        if not args or args[0] != self._camera_id:
             return
-
-        latest_path = (
-            cast("str | None", args[IDX_LATEST_PATH])
-            if len(args) > IDX_LATEST_PATH
-            else None
-        )
-        summary = (
-            cast("str | None", args[IDX_SUMMARY]) if len(args) > IDX_SUMMARY else None
-        )
-        people = (
-            cast("Sequence[str] | None", args[IDX_PEOPLE])
-            if len(args) > IDX_PEOPLE
-            else None
-        )
-        last_event_iso = (
-            cast("str | None", args[IDX_LAST_EVENT_ISO])
-            if len(args) > IDX_LAST_EVENT_ISO
-            else None
-        )
-
+        p = NewLatestArgs(*args)
         upd = UpdateBundle(
-            latest_path=Path(latest_path) if latest_path else None,
-            summary=summary,
-            people=self._list_or_none(people),
-            last_event_iso=last_event_iso,
+            latest_path=Path(p.latest_path) if p.latest_path else None,
+            summary=p.summary,
+            people=self._list_or_none(p.people),
+            last_event_iso=p.last_event_iso,
         )
         self._apply_update(upd)
         self.async_write_ha_state()
@@ -183,31 +177,14 @@ class LastEventImage(ImageEntity):
     @callback
     def _on_recognized(self, *args: Any) -> None:
         """Handle SIGNAL_HGA_RECOGNIZED."""
-        if not args or cast("str", args[IDX_CAMERA_ID]) != self._camera_id:
+        if not args or args[0] != self._camera_id:
             return
-
-        people = (
-            cast("Sequence[str] | None", args[IDX_LATEST_PATH])
-            if len(args) > IDX_LATEST_PATH
-            else None
-        )
-        summary = (
-            cast("str | None", args[IDX_SUMMARY]) if len(args) > IDX_SUMMARY else None
-        )
-        last_event_iso = (
-            cast("str | None", args[IDX_PEOPLE]) if len(args) > IDX_PEOPLE else None
-        )
-        latest_path = (
-            cast("str | None", args[IDX_LAST_EVENT_ISO])
-            if len(args) > IDX_LAST_EVENT_ISO
-            else None
-        )
-
+        p = RecognizedArgs(*args)
         upd = UpdateBundle(
-            latest_path=Path(latest_path) if latest_path else None,
-            summary=summary,
-            people=self._list_or_none(people),
-            last_event_iso=last_event_iso,
+            latest_path=Path(p.latest_path) if p.latest_path else None,
+            summary=p.summary,
+            people=self._list_or_none(p.people),
+            last_event_iso=p.last_event_iso,
         )
         self._apply_update(upd)
         self.async_write_ha_state()
