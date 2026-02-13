@@ -250,6 +250,8 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                     (
                         options.get(CONF_PROMPT, llm.DEFAULT_INSTRUCTIONS_PROMPT)
                         + f"\nYou are in the {self.tz} timezone."
+                        + f"\nCurrent date and time is {dt_util.now().strftime('%Y-%m-%d %H:%M:%S')}."
+                        + f"\nYou have access to the following tools: {', '.join(tool['function']['name'] for tool in tools)}."
                         + TOOL_CALL_ERROR_SYSTEM_MESSAGE
                         if tools
                         else ""
@@ -275,8 +277,8 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                 response=intent_response, conversation_id=conversation_id
             )
 
-        if llm_api:
-            prompt_parts.append(llm_api.api_prompt)
+        # if llm_api:
+        #    prompt_parts.append(llm_api.api_prompt)
 
         prompt = "\n".join(prompt_parts)
 

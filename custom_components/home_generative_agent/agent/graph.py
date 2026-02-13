@@ -56,11 +56,19 @@ from .token_counter import count_tokens_cross_provider
 from .tool_metrics import ToolCallMetrics
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from homeassistant.core import HomeAssistant
     from langchain_core.runnables import RunnableConfig
     from langgraph.store.base import BaseStore
 
 LOGGER = logging.getLogger(__name__)
+
+# Maps provider names to their model configuration keys.
+_PROVIDER_MODEL_KEYS: dict[str, str] = {
+    "openai": CONF_OPENAI_CHAT_MODEL,
+    "gemini": CONF_GEMINI_CHAT_MODEL,
+}
 
 
 class ToolErrorType(str, Enum):
@@ -75,21 +83,11 @@ class ToolErrorType(str, Enum):
     @classmethod
     def classify(
         cls, error: Exception, timeout_exceeded: bool = False
-    ) -> "ToolErrorType":
-        """Classify error type based on exception.
-
-        Args:
-            error: The exception to classify
-            timeout_exceeded: Whether timeout was exceeded
-
-        Returns:
-            ToolErrorType classification
-        """
+    ) -> ToolErrorType:
+        """Classify error type based on exception."""
         if timeout_exceeded:
             return cls.TIMEOUT
-        if isinstance(error, ValidationError):
-            return cls.VALIDATION
-        if isinstance(error, (ValueError, TypeError, KeyError)):
+        if isinstance(error, (ValidationError, ValueError, TypeError, KeyError)):
             return cls.VALIDATION
         if isinstance(error, AttributeError):
             return cls.NOT_FOUND
@@ -113,6 +111,14 @@ class State(MessagesState):
 # ----- Utilities -----
 
 
+def _require_config(config: RunnableConfig) -> dict[str, Any]:
+    """Extract and validate the configurable dict, raising on absence."""
+    if "configurable" not in config:
+        msg = "Configuration is missing."
+        raise HomeAssistantError(msg)
+    return config["configurable"]
+
+
 def _log_ctx(config: RunnableConfig) -> tuple[str, str]:
     """Extract (conversation_id, run_id) for logging."""
     cfg = config.get("configurable", {})
@@ -123,6 +129,49 @@ def _truncate(text: str, max_len: int = 300) -> str:
     """Truncate text with ellipsis if over max_len."""
     s = str(text)
     return s[:max_len] + "..." if len(s) > max_len else s
+
+
+def _format_messages_full(messages: list[AnyMessage]) -> str:
+    """Format a message list for full (Loki) logging — no truncation."""
+    return "\n".join(
+        f"[{i}] {type(m).__name__}: {str(getattr(m, 'content', ''))}"
+        for i, m in enumerate(messages)
+    )
+
+
+def _format_ai_message_full(msg: AIMessage) -> str:
+    """Format an AI message for full (Loki) logging."""
+    content = str(getattr(msg, "content", "") or "")
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        content += f" [tool_calls: {json.dumps(msg.tool_calls, ensure_ascii=False)}]"
+    return content
+
+
+def _determine_model_name(provider: str, opts: dict[str, Any]) -> str:
+    """Determine model name based on provider and options."""
+    key = _PROVIDER_MODEL_KEYS.get(provider, CONF_OLLAMA_CHAT_MODEL)
+    return opts.get(key, "")
+
+
+def _build_system_message(
+    prompt: str,
+    memories: list,
+    camera_activity: list[dict[str, dict[str, str]]],
+    summary: str,
+) -> str:
+    """Assemble the system message from prompt, memories, camera activity, and summary."""
+    parts = [prompt]
+    if memories:
+        formatted = "\n".join(f"[{mem.key}]: {mem.value}" for mem in memories)
+        parts.append(f"<memories>\n{formatted}\n</memories>")
+    if camera_activity:
+        ca = "\n".join(str(a) for a in camera_activity)
+        parts.append(f"<recent_camera_activity>\n{ca}\n</recent_camera_activity>")
+    if summary:
+        parts.append(
+            f"<past_conversation_summary>\n{summary}\n</past_conversation_summary>"
+        )
+    return "\n".join(parts)
 
 
 async def _retrieve_camera_activity(
@@ -153,13 +202,115 @@ async def _retrieve_camera_activity(
     return []
 
 
-def _determine_model_name(provider: str, opts: dict[str, Any]) -> str:
-    """Determine model name based on provider and options."""
-    if provider == "openai":
-        return opts.get(CONF_OPENAI_CHAT_MODEL, "")
-    if provider == "gemini":
-        return opts.get(CONF_GEMINI_CHAT_MODEL, "")
-    return opts.get(CONF_OLLAMA_CHAT_MODEL, "")
+# ----- Tool execution helpers -----
+
+
+def _create_tool_error_message(
+    err: Exception,
+    tool_name: str,
+    tool_id: str,
+    error_type: ToolErrorType,
+    conversation_id: str,
+    run_id: str,
+) -> ToolMessage:
+    """Create an error ToolMessage with classification and logging."""
+    log_with_context(
+        LOGGER,
+        logging.WARNING,
+        f"Tool error in {tool_name}",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="action",
+        tool_name=tool_name,
+        tool_id=tool_id,
+        error_type=error_type.value,
+        error=_truncate(str(err), 200),
+    )
+    return ToolMessage(
+        content=TOOL_CALL_ERROR_TEMPLATE.format(error=str(err)),
+        name=tool_name,
+        tool_call_id=tool_id,
+        status="error",
+    )
+
+
+async def _execute_tool_call(
+    coro: Awaitable,
+    *,
+    tool_name: str,
+    tool_id: str,
+    metric: ToolCallMetrics | None,
+    conversation_id: str,
+    run_id: str,
+    known_exceptions: tuple[type[Exception], ...] = (),
+) -> Any:
+    """Execute a tool call with timeout and unified error handling.
+
+    Returns the raw result on success, or a ToolMessage (status="error") on failure.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=TOOL_CALL_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        err: Exception = Exception(
+            f"Tool '{tool_name}' timed out after {TOOL_CALL_TIMEOUT_SECONDS}s"
+        )
+        error_type = ToolErrorType.TIMEOUT
+    except Exception as exc:
+        err = exc
+        if isinstance(exc, known_exceptions):
+            error_type = ToolErrorType.classify(exc)
+        else:
+            error_type = ToolErrorType.EXECUTION
+            log_with_context(
+                LOGGER,
+                logging.ERROR,
+                f"Unexpected error in tool {tool_name}",
+                conversation_id=conversation_id,
+                run_id=run_id,
+                node="action",
+                tool_id=tool_id,
+                error=_truncate(str(exc), 200),
+                exc_info=True,
+            )
+    if metric:
+        metric.finalize(
+            success=False,
+            error_type=error_type.value,
+            error_message=str(err),
+        )
+    return _create_tool_error_message(
+        err, tool_name, tool_id, error_type, conversation_id, run_id
+    )
+
+
+def _log_tool_response(
+    tool_name: str,
+    tool_id: str,
+    tool_type: str,
+    content: str,
+    conversation_id: str,
+    run_id: str,
+) -> None:
+    """Log a successful tool response (truncated for console, full for Loki)."""
+    log_with_context(
+        LOGGER,
+        logging.DEBUG,
+        f"{tool_type} tool {tool_name} response",
+        conversation_id=conversation_id,
+        run_id=run_id,
+        node="action",
+        tool_id=tool_id,
+        response_size=len(content),
+        response_preview=_truncate(content),
+        loki_message=(
+            f"{tool_type} tool {tool_name} response (size={len(content)}): {content}"
+        ),
+    )
+
+
+def _is_tool_error(result: Any) -> bool:
+    """Check if a tool execution result is an error ToolMessage."""
+    return isinstance(result, ToolMessage) and result.status == "error"
 
 
 # ----- Graph nodes and edges -----
@@ -169,44 +320,31 @@ async def _call_model(
     state: State, config: RunnableConfig, *, store: BaseStore
 ) -> dict[str, Any]:
     """Coroutine to call the chat model."""
-    if "configurable" not in config:
-        msg = "Configuration for the model is missing."
-        raise HomeAssistantError(msg)
-
-    # Extract context for logging
+    cfg = _require_config(config)
     conversation_id, run_id = _log_ctx(config)
-    user_id = config["configurable"]["user_id"]
 
-    model = config["configurable"]["chat_model"]
-    hass = config["configurable"]["hass"]
-    opts = config["configurable"]["options"]
-    chat_model_options = config["configurable"].get("chat_model_options", {})
+    model = cfg["chat_model"]
+    hass = cfg["hass"]
+    opts = cfg["options"]
+    chat_model_options = cfg.get("chat_model_options", {})
+    user_id = cfg["user_id"]
 
     # Retrieve memories (semantic if last message is from user).
     last_message = state["messages"][-1]
-    last_message_from_user = isinstance(last_message, HumanMessage)
     query_prompt = (
         EMBEDDING_MODEL_PROMPT_TEMPLATE.format(query=last_message.content)
-        if last_message_from_user
+        if isinstance(last_message, HumanMessage)
         else None
     )
-    mems = await store.asearch((user_id, "memories"), query=query_prompt, limit=10)
+    memories = await store.asearch((user_id, "memories"), query=query_prompt, limit=10)
 
-    # Recent camera activity.
-    camera_activity = await _retrieve_camera_activity(hass, store)
-
-    # Build system message.
-    system_message = config["configurable"]["prompt"]
-    if mems:
-        formatted_mems = "\n".join(f"[{mem.key}]: {mem.value}" for mem in mems)
-        system_message += f"\n<memories>\n{formatted_mems}\n</memories>"
-    if camera_activity:
-        ca = "\n".join(str(a) for a in camera_activity)
-        system_message += f"\n<recent_camera_activity>\n{ca}\n</recent_camera_activity>"
-    if summary := state.get("summary", ""):
-        system_message += (
-            f"\n<past_conversation_summary>\n{summary}\n</past_conversation_summary>"
-        )
+    # Build system message with all context.
+    system_message = _build_system_message(
+        prompt=cfg["prompt"],
+        memories=memories,
+        camera_activity=await _retrieve_camera_activity(hass, store),
+        summary=state.get("summary", ""),
+    )
 
     # Model input = System + current messages.
     messages = [SystemMessage(content=system_message)] + state["messages"]
@@ -249,13 +387,6 @@ async def _call_model(
     )
 
     # Log input messages summary
-    # Create full untruncated version for Loki
-    loki_full_messages = "\n".join(
-        [
-            f"[{i}] {type(m).__name__}: {str(getattr(m, 'content', ''))}"
-            for i, m in enumerate(trimmed_messages)
-        ]
-    )
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -263,17 +394,10 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
-        loki_message=f"Calling model with messages:\n{loki_full_messages}",
+        loki_message=f"Calling model with messages:\n{_format_messages_full(trimmed_messages)}",
     )
 
     raw_response = await model.ainvoke(trimmed_messages)
-
-    # Get full content for Loki (no truncation)
-    raw_response_full = str(getattr(raw_response, "content", "") or "")
-    if hasattr(raw_response, "tool_calls") and raw_response.tool_calls:
-        raw_response_full += (
-            f" [tool_calls: {json.dumps(raw_response.tool_calls, ensure_ascii=False)}]"
-        )
 
     log_with_context(
         LOGGER,
@@ -282,23 +406,17 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
-        loki_message=f"Raw model response: {raw_response_full}",
+        loki_message=f"Raw model response: {_format_ai_message_full(raw_response)}",
     )
 
     response = extract_final(getattr(raw_response, "content", "") or "")
 
-    # Create AI message, no need to include tool call metadata if there's none.
-    if hasattr(raw_response, "tool_calls"):
-        ai_response = AIMessage(content=response, tool_calls=raw_response.tool_calls)
-    else:
-        ai_response = AIMessage(content=response)
-
-    # Get full AI response for Loki (no truncation)
-    ai_response_full = str(getattr(ai_response, "content", "") or "")
-    if hasattr(ai_response, "tool_calls") and ai_response.tool_calls:
-        ai_response_full += (
-            f" [tool_calls: {json.dumps(ai_response.tool_calls, ensure_ascii=False)}]"
-        )
+    # Create AI message, preserving tool calls if present.
+    ai_response = (
+        AIMessage(content=response, tool_calls=raw_response.tool_calls)
+        if hasattr(raw_response, "tool_calls")
+        else AIMessage(content=response)
+    )
 
     log_with_context(
         LOGGER,
@@ -307,7 +425,7 @@ async def _call_model(
         conversation_id=conversation_id,
         run_id=run_id,
         node="agent",
-        loki_message=f"AI response created: {ai_response_full}",
+        loki_message=f"AI response created: {_format_ai_message_full(ai_response)}",
     )
 
     metadata: dict[str, str] = (
@@ -367,11 +485,7 @@ async def _summarize_and_remove_messages(
     state: State, config: RunnableConfig
 ) -> dict[str, Any]:
     """Summarize trimmed messages and remove them from state."""
-    if "configurable" not in config:
-        msg = "Configuration is missing."
-        raise HomeAssistantError(msg)
-
-    # Extract context for logging
+    cfg = _require_config(config)
     conversation_id, run_id = _log_ctx(config)
 
     summary = state.get("summary", "")
@@ -392,14 +506,14 @@ async def _summarize_and_remove_messages(
     total_to_remove = len(msgs_to_remove)
     type_counts = Counter(type(m).__name__ for m in msgs_to_remove)
 
-    # Get configurable prompts from config, with fallbacks to defaults
-    summarization_system_prompt = config["configurable"].get(
+    # Get configurable prompts with fallbacks to defaults
+    summarization_system_prompt = cfg.get(
         "summarization_system_prompt", RECOMMENDED_SUMMARIZATION_SYSTEM_PROMPT
     )
-    summarization_initial_prompt = config["configurable"].get(
+    summarization_initial_prompt = cfg.get(
         "summarization_initial_prompt", RECOMMENDED_SUMMARIZATION_INITIAL_PROMPT
     )
-    summarization_prompt_template = config["configurable"].get(
+    summarization_prompt_template = cfg.get(
         "summarization_prompt_template", RECOMMENDED_SUMMARIZATION_PROMPT_TEMPLATE
     )
 
@@ -409,7 +523,6 @@ async def _summarize_and_remove_messages(
         else summarization_initial_prompt
     )
 
-    # Build messages for the already-configured summarization model.
     # Only include HumanMessage and AIMessage (filter out System, Tool, etc.)
     filtered_messages = [
         m for m in msgs_to_remove if isinstance(m, (HumanMessage, AIMessage))
@@ -424,13 +537,6 @@ async def _summarize_and_remove_messages(
     type_summary = ", ".join(
         f"{count} {msg_type}" for msg_type, count in sorted(type_counts.items())
     )
-    # Create full untruncated version for Loki
-    loki_full_summary_msgs = "\n".join(
-        [
-            f"[{i}] {type(m).__name__}: {str(getattr(m, 'content', ''))}"
-            for i, m in enumerate(filtered_messages)
-        ]
-    )
     log_with_context(
         LOGGER,
         logging.DEBUG,
@@ -441,20 +547,19 @@ async def _summarize_and_remove_messages(
         total_to_remove=total_to_remove,
         filtered_for_summary=len(filtered_messages),
         types=type_summary,
-        loki_message=f"Summarizing messages:\n{loki_full_summary_msgs}",
+        loki_message=f"Summarizing messages:\n{_format_messages_full(filtered_messages)}",
     )
 
-    model = config["configurable"]["summarization_model"]
+    model = cfg["summarization_model"]
     raw_response = await model.ainvoke(messages)
 
     response = extract_final(getattr(raw_response, "content", "") or "")
 
     # Log summary result
-    summary_preview = _truncate(response, 200)
     log_with_context(
         LOGGER,
         logging.DEBUG,
-        f"Summary created ({len(response)} chars): {summary_preview}",
+        f"Summary created ({len(response)} chars): {_truncate(response, 200)}",
         conversation_id=conversation_id,
         run_id=run_id,
         node="summarize",
@@ -475,20 +580,14 @@ async def _call_tools(
 ) -> dict[str, list[ToolMessage]]:
     """Call Home Assistant or LangChain tools requested by the model.
 
-    Includes enhanced error handling, timeouts, and metrics collection.
+    Includes unified error handling, timeouts, and metrics collection.
     """
-    if "configurable" not in config:
-        msg = "Configuration is missing."
-        raise HomeAssistantError(msg)
-
-    # Extract context for logging
+    cfg = _require_config(config)
     conversation_id, run_id = _log_ctx(config)
 
-    langchain_tools = config["configurable"]["langchain_tools"]
-    ha_llm_api = config["configurable"]["ha_llm_api"]
-
-    # Get metrics collector from config
-    metrics_collector = config["configurable"].get("metrics_collector")
+    langchain_tools = cfg["langchain_tools"]
+    ha_llm_api = cfg["ha_llm_api"]
+    metrics_collector = cfg.get("metrics_collector")
 
     # Expect tool calls in the last AIMessage.
     if not state["messages"] or not isinstance(state["messages"][-1], AIMessage):
@@ -522,223 +621,68 @@ async def _call_tools(
             metric = ToolCallMetrics(tool_name=tool_name, call_id=tool_id)
             metrics_collector.add_metric(metric)
 
-        def _handle_tool_error(
-            err: Exception,
-            name: str,
-            tid: str,
-            error_type: ToolErrorType = ToolErrorType.UNKNOWN,
-        ) -> ToolMessage:
-            """Create error response with classification."""
-            error_msg = str(err)
-            log_with_context(
-                LOGGER,
-                logging.WARNING,
-                f"Tool error in {name}",
-                conversation_id=conversation_id,
-                run_id=run_id,
-                node="action",
-                tool_name=name,
-                tool_id=tid,
-                error_type=error_type.value,
-                error=_truncate(error_msg, 200),
-            )
-            message = TOOL_CALL_ERROR_TEMPLATE.format(error=error_msg)
-            return ToolMessage(
-                content=message,
-                name=name,
-                tool_call_id=tid,
-                status="error",
-            )
-
-        # LangChain tool
+        # Prepare invocation based on tool type
         if tool_name in langchain_tools:
             lc_tool = langchain_tools[tool_name.lower()]
             tool_call_copy = copy.deepcopy(tool_call)
             tool_call_copy["args"].update({"store": store, "config": config})
-            try:
-                # Execute with timeout
-                tool_response = await asyncio.wait_for(
-                    lc_tool.ainvoke(tool_call_copy),
-                    timeout=TOOL_CALL_TIMEOUT_SECONDS,
-                )
-                if metric:
-                    # Calculate response size
-                    response_size = len(str(tool_response)) if tool_response else 0
-                    metric.finalize(
-                        success=True,
-                        response_size_bytes=response_size,
-                    )
-
-                # Log tool response with truncation for console, full for Loki
-                response_preview = _truncate(tool_response)
-                log_with_context(
-                    LOGGER,
-                    logging.DEBUG,
-                    f"LangChain tool {tool_name} response",
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    node="action",
-                    tool_id=tool_id,
-                    response_size=len(str(tool_response)),
-                    response_preview=response_preview,
-                    loki_message=f"LangChain tool {tool_name} response (size={len(str(tool_response))}): {str(tool_response)}",
-                )
-            except asyncio.TimeoutError:
-                error_type = ToolErrorType.TIMEOUT
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message="Tool execution timed out",
-                    )
-                tool_response = _handle_tool_error(
-                    Exception(
-                        f"Tool '{tool_name}' timed out after"
-                        f" {TOOL_CALL_TIMEOUT_SECONDS}s"
-                    ),
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
-            except (HomeAssistantError, ValidationError, ValueError, TypeError) as err:
-                error_type = ToolErrorType.classify(err)
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message=str(err),
-                    )
-                tool_response = _handle_tool_error(
-                    err,
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
-            except Exception as err:
-                error_type = ToolErrorType.EXECUTION
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message=str(err),
-                    )
-                log_with_context(
-                    LOGGER,
-                    logging.ERROR,
-                    f"Unexpected error in LangChain tool {tool_name}",
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    node="action",
-                    tool_id=tool_id,
-                    error=_truncate(err, 200),
-                    exc_info=True,
-                )
-                tool_response = _handle_tool_error(
-                    err,
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
-        # Home Assistant tool
+            coro = lc_tool.ainvoke(tool_call_copy)
+            known_exceptions = (
+                HomeAssistantError,
+                ValidationError,
+                ValueError,
+                TypeError,
+            )
+            tool_type = "LangChain"
         else:
             tool_input = llm.ToolInput(tool_name=tool_name, tool_args=tool_args)
-            try:
-                # Execute with timeout
-                response = await asyncio.wait_for(
-                    ha_llm_api.async_call_tool(tool_input),
-                    timeout=TOOL_CALL_TIMEOUT_SECONDS,
-                )
+            coro = ha_llm_api.async_call_tool(tool_input)
+            known_exceptions = (
+                HomeAssistantError,
+                vol.Invalid,
+                ValueError,
+                AttributeError,
+            )
+            tool_type = "HA"
+
+        # Execute with unified timeout and error handling
+        result = await _execute_tool_call(
+            coro,
+            tool_name=tool_name,
+            tool_id=tool_id,
+            metric=metric,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            known_exceptions=known_exceptions,
+        )
+
+        if _is_tool_error(result):
+            tool_response = result
+        else:
+            # Build ToolMessage and log on success
+            if tool_type == "HA":
                 tool_response = ToolMessage(
-                    content=json.dumps(response),
+                    content=json.dumps(result),
                     tool_call_id=tool_id,
                     name=tool_name,
                 )
-                if metric:
-                    response_size = len(json.dumps(response)) if response else 0
-                    metric.finalize(
-                        success=True,
-                        response_size_bytes=response_size,
-                    )
+                log_content = json.dumps(result, ensure_ascii=False)
+            else:
+                tool_response = result
+                log_content = str(tool_response)
 
-                # Log HA tool response with truncation for console, full for Loki
-                # Parse JSON content for better readability
-                try:
-                    parsed_content = json.loads(tool_response.content)
-                    full_content = json.dumps(parsed_content, ensure_ascii=False)
-                except (json.JSONDecodeError, TypeError):
-                    full_content = str(tool_response.content)
-                content_preview = _truncate(full_content)
+            if metric:
+                metric.finalize(success=True, response_size_bytes=len(log_content))
 
-                log_with_context(
-                    LOGGER,
-                    logging.DEBUG,
-                    f"HA tool {tool_name} response",
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    node="action",
-                    tool_id=tool_id,
-                    response_size=len(str(tool_response.content)),
-                    response_preview=content_preview,
-                    loki_message=f"HA tool {tool_name} response (size={len(str(tool_response.content))}): {full_content}",
-                )
-            except asyncio.TimeoutError:
-                error_type = ToolErrorType.TIMEOUT
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message="Tool execution timed out",
-                    )
-                tool_response = _handle_tool_error(
-                    Exception(
-                        f"Tool '{tool_name}' timed out after"
-                        f" {TOOL_CALL_TIMEOUT_SECONDS}s"
-                    ),
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
-            except (HomeAssistantError, vol.Invalid, ValueError, AttributeError) as err:
-                error_type = ToolErrorType.classify(err)
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message=str(err),
-                    )
-                tool_response = _handle_tool_error(
-                    err,
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
-            except Exception as err:
-                error_type = ToolErrorType.EXECUTION
-                if metric:
-                    metric.finalize(
-                        success=False,
-                        error_type=error_type.value,
-                        error_message=str(err),
-                    )
-                log_with_context(
-                    LOGGER,
-                    logging.ERROR,
-                    f"Unexpected error in HA tool {tool_name}",
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    node="action",
-                    tool_id=tool_id,
-                    error=_truncate(err, 200),
-                    exc_info=True,
-                )
-                tool_response = _handle_tool_error(
-                    err,
-                    tool_name,
-                    tool_id,
-                    error_type,
-                )
+            _log_tool_response(
+                tool_name,
+                tool_id,
+                tool_type,
+                log_content,
+                conversation_id,
+                run_id,
+            )
 
-        # Append to responses
         tool_responses.append(tool_response)
 
     # Log metrics summary if available
@@ -769,11 +713,7 @@ async def _confirm_automation(
     This implements human-in-the-loop for safety-critical operations.
     Uses LangGraph's interrupt() to pause execution and wait for user response.
     """
-    if "configurable" not in config:
-        msg = "Configuration is missing."
-        raise HomeAssistantError(msg)
-
-    # Extract context for logging
+    _require_config(config)
     conversation_id, run_id = _log_ctx(config)
 
     messages = state["messages"]
