@@ -251,7 +251,7 @@ class HGAConversationEntity(conversation.ConversationEntity, AbstractConversatio
                         options.get(CONF_PROMPT, llm.DEFAULT_INSTRUCTIONS_PROMPT)
                         + f"\nYou are in the {self.tz} timezone."
                         + f"\nCurrent date and time is {dt_util.now().strftime('%Y-%m-%d %H:%M:%S')}."
-                        + f"\nYou have access to the following tools: {', '.join(tool['function']['name'] for tool in tools)}."
+                        + "\nAlways call your tool GetLiveContext to get the current state of the home before making decisions."
                         + TOOL_CALL_ERROR_SYSTEM_MESSAGE
                         if tools
                         else ""
